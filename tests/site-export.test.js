@@ -267,6 +267,19 @@ describe('harvest + expansion + tiers', () => {
     expect(byKey['wallpaper/full/old.jpg']).toBe('full'); // pre-fullres assumes .jpg
   });
 
+  it('a field-note hero travels at the tier the homepage hero card asks for', () => {
+    // The picture-led field-note card (js/recent-index.js textHeroCard) builds
+    // its background at 1024w through frameSrc(), so an exported tree that
+    // carries the note but not that object renders a blank tile from file://.
+    // posts.json heroes ride the archive/ prefix, same as a frame.
+    const keys = expandImageRules(
+      { 'data/posts.json': [{ fn_id: 'fn-001', hero: 'note hero.webp', card: { layout: 'hero' } }] },
+      EXPORT_MANIFEST.imageRules
+    );
+    const byKey = Object.fromEntries(keys.map((k) => [k.key, k.tier]));
+    expect(byKey['archive/note%20hero-1024w.webp']).toBe('web');
+  });
+
   it('merges duplicates keeping the most essential tier', () => {
     const merged = mergeKeyTiers([
       { key: 'archive/a-2048w.webp', tier: 'hires' },

@@ -36,7 +36,17 @@ try {
 <script async src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js" integrity="sha384-KRanV2NRwHPanp7iM6nlLQC5jPCTscSYMko30dLJHzNXJaUNtcucWv+SOi3jV3PE" crossorigin="anonymous"></script>
 <script async src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
 
-<link rel="stylesheet" href="/css/field-console.css?v=41">
+<!-- The homepage's own recent-work grid logic, loaded as the classic script it
+     is (window.RecentIndex) so the Cards view can compose its LIVE and STAGED
+     columns with the exact code the public page runs instead of a second
+     implementation that drifts. Its DOM boot bails immediately here — there is
+     no #recent-index in this document — so it costs one cached file and nothing
+     else. It is a <script src>, not a module, so its version lives on this tag;
+     the import-map entry beside the console modules exists so dev/sw.js and
+     index.html can never disagree with it (tests/guards.test.js). -->
+<script src="/js/recent-index.js?v=16" defer></script>
+
+<link rel="stylesheet" href="/css/field-console.css?v=50">
 </head>
 <body>
 
@@ -63,8 +73,13 @@ try {
   <button class="settings-btn" id="settings-topbar-btn" onclick="openSettings()" title="Console Settings">
     ⚙<span class="settings-status-dot" id="settings-dot"></span>
   </button>
-  <button class="publish-btn empty" id="publish-btn" onclick="openPublishView()">
-    Publish <span class="badge" id="publish-badge">0</span>
+  <!-- Status light, not a counter. The pip says only "there is something to
+       publish"; the count lives one glance left in #topbar-stage-stat (and on
+       the publish page, now itemised). Square + static — deliberately NOT a
+       second SYS lamp, which is the round bezelled LED with the glow. -->
+  <button class="publish-btn empty" id="publish-btn" data-pending="0" onclick="openPublishView()"
+          aria-label="Publish — no pending changes">
+    <span class="pip" id="publish-pip" aria-hidden="true"></span> Publish
   </button>
   <div class="sys-ledger hidden" id="sys-ledger" role="log" aria-label="Activity ledger"></div>
   <div class="sys-progress" id="sys-progress"><div class="sys-progress-fill" id="sys-progress-fill"></div></div>
@@ -110,6 +125,9 @@ try {
       <button class="nav-btn" data-view="audio" onclick="showView('audio')">
         <span class="nav-icon">♪</span> Audio
         <span class="nav-count" id="nav-count-audio">0</span>
+      </button>
+      <button class="nav-btn" data-view="cards" onclick="showView('cards')">
+        <span class="nav-icon">▥</span> Cards
       </button>
       <!-- Config-gated (site.config.js -> console.bench). The edge removes this
            button, the More-sheet item and #view-bench when the flag is off. -->
@@ -305,140 +323,224 @@ try {
       </div>
     </section>
 
-    <section class="view" id="view-fn">
-      <div class="view-header">
-        <div>
-          <div class="view-title">FIELD <em>NOTES</em></div>
-          <div class="view-sub">// MARKDOWN · INLINE IMAGES · f#N CITES A BUFFER FRAME · AUTO-SAVE · ⌘B ⌘I ⌘K</div>
-        </div>
-        <div class="view-meta">
-          <div><span class="accent">WRITES TO: /posts/<id>.md</span></div>
-          <div id="fn-stats">— posts</div>
-        </div>
-      </div>
+    <!-- ==================================================================
+         FIELD NOTES STUDIO  (rewritten 2026-08-23 — see
+         docs/maintenance/2026-08-23-field-notes-studio.md)
 
-      <div class="btn-row" style="margin-bottom: 14px;">
-        <button class="btn btn-primary btn-sm" onclick="fnNewPost()">+ New Draft</button>
-        <select class="field-select" id="fn-draft-select" style="max-width: 260px;" onchange="fnLoadPost(this.value)" title="Open a saved draft">
-          <option value="">— Drafts —</option>
-        </select>
-        <select class="field-select" id="fn-post-select" style="max-width: 260px;" onchange="fnLoadPost(this.value)" title="Open a published post">
-          <option value="">— Published —</option>
-        </select>
-      </div>
+         A manuscript, not a compose grid. THREE parts and no more:
 
-      <hr class="rule-perf" aria-hidden="true">
+           1. .fn-bar     — fixed. Three zones, none of which can push another.
+           2. .fn-canvas  — the ONLY scroller on this surface. The manuscript
+                            lives here and the textarea grows with its content,
+                            so there is never a scroller inside a scroller.
+           3. .fn-dock    — the insert tools. Floats on a wide screen; on a
+                            compact one it also receives the bar's actions.
 
+         Everything else is an overlay that is CLOSED by default — the preview
+         panel, the media drawer, the ⋯ menu. That is the whole trick: the old
+         editor tried to hold the writing surface and the preview on screen at
+         once, which made it width-hungry, which is what wrapped the toolbar and
+         made every autosave reflow the row.
 
-      <!-- Portrait writing bar (shown ≤920px / iPad portrait): one pane at a
-           time — WRITE is primary, PREVIEW renders on demand. SAVE/STAGE ride
-           here because the preview pane (which hosts them on desktop) is
-           hidden while writing. -->
-      <div class="fn-portrait-bar">
-        <div class="fn-seg" role="tablist" aria-label="Editor pane">
-          <button class="fn-seg-btn active" id="fn-seg-write" role="tab" onclick="fnSetPane('write')">✍ WRITE</button>
-          <button class="fn-seg-btn" id="fn-seg-preview" role="tab" onclick="fnSetPane('preview')">◫ PREVIEW</button>
-        </div>
-        <div class="fn-portrait-actions">
-          <button class="fn-panel-btn fn-bar-toggle" id="fn-bar-toggle-p" onclick="toggleFnBar()" title="Hide tab bar" aria-label="Hide tab bar" aria-pressed="false">▾</button>
-          <button class="btn btn-sm btn-ghost" onclick="fnStage('draft')">SAVE</button>
-          <button class="btn btn-sm btn-stage" onclick="fnStage('published')">▲ STAGE</button>
-        </div>
-      </div>
+         Layout rules this markup exists to keep (all pinned by
+         tests/fn-studio.test.js — read that before moving anything):
+           · No row of buttons may wrap. Ever. Zones relocate; they never stack.
+           · The live save/sync readout sits in a FIXED-WIDTH slot, so writing a
+             new status into it cannot move a single button.
+           · One scroller. The canvas.
+         ================================================================== -->
+    <section class="view view--bounded" id="view-fn">
+      <div class="fn-studio">
 
-      <div class="fn-compose">
-        <div class="editor">
-          <div class="fn-pane-hdr">
-            <span>EDITOR · <span id="fn-current-slug" style="color:var(--accent);">UNTITLED</span><span id="fn-status-badge" style="font-size: 0.6rem; margin-left: 8px; color: var(--text-faint);"></span><span class="fn-unsaved-dot" id="fn-unsaved-dot"></span></span>
-            <div class="fn-hdr-tools">
-              <button class="fn-panel-btn" id="fn-dates-btn" onclick="fnToggleBufferDates()" title="Buffer date embed picker">DATES</button>
-              <button class="fn-panel-btn" id="fn-frames-btn" onclick="fnToggleFrameBrowser()" title="Frame strip browser">FRAMES</button>
-              <button class="fn-panel-btn" id="fn-asset-btn" onclick="openAssetLibrary(assetToPostBody, 'archive', true)" title="Insert image(s) from asset library">ASSET</button>
-              <button class="fn-panel-btn" id="fn-video-btn" onclick="openAssetLibrary(assetToPostVideo, 'videos')" title="Insert a looping video banner">VIDEO</button>
-              <button class="fn-panel-btn" id="fn-music-btn" onclick="fnInsertMusic()" title="Insert an Apple Music player from a share link or embed code">MUSIC</button>
-              <!-- Attaching here is the SAME ingest as the Audio shelf — the
-                   track lands in the one registry and its shortcode drops at
-                   the cursor. Two in a row become a tracklist. -->
-              <button class="fn-panel-btn" id="fn-audio-btn" onclick="fnAttachAudio()" title="Attach your own audio — it lands on the Audio shelf and plays here">AUDIO</button>
-              <button class="fn-collapse-btn" id="fn-collapse-btn" onclick="fnToggleFrontmatter()" title="Add a title, location and date">TITLE ▾</button>
-              <button class="fn-focus-btn" onclick="fnToggleFocus()" title="Focus mode (Esc to exit)">◎ FOCUS</button>
-              <button class="fn-panel-btn fn-bar-toggle" id="fn-bar-toggle" onclick="toggleFnBar()" title="Hide tab bar" aria-label="Hide tab bar" aria-pressed="false">▾ BAR</button>
-              <button class="btn btn-sm btn-danger" id="fn-delete-btn" style="display:none; padding: 4px 8px; font-size: 0.55rem;" onclick="fnDeletePost()">⌫ Delete</button>
-              <span class="fn-hdr-stats">
-                <span class="fn-save-status" id="fn-save-status"></span>
-                <span class="fn-cloud-status" id="fn-cloud-status" title="Cloud draft sync (D1)"></span>
-                <span id="fn-word-count">0 words</span>
-                <span id="fn-read-time"></span>
+        <!-- ---- 1. THE BAR ------------------------------------------------
+             Left zone shrinks (the select truncates its own text), the middle
+             zone is a rigid reserved slot, the right zone never shrinks. On a
+             compact screen .fn-bar-actions is lifted out of this row by CSS
+             alone and docked at the bottom — same DOM, same handlers, no
+             second copy of a button to drift out of sync. -->
+        <header class="fn-bar">
+          <div class="fn-bar-doc">
+            <select class="fn-doc-select" id="fn-doc-select"
+                    onchange="fnLoadPost(this.value)"
+                    aria-label="Open a field note">
+              <option value="">— no notes yet —</option>
+            </select>
+            <button class="fn-btn fn-btn--new" onclick="fnNewPost()" title="Start a new note (nothing is lost — the open one keeps saving)">
+              <span class="fn-g">+</span><span class="fn-l">NEW</span>
+            </button>
+          </div>
+
+          <!-- Reserved-width telemetry. `aria-live="polite"` announces a save
+               without stealing focus; the widths are in `ch` so the longest
+               state each span can hold is already paid for. -->
+          <div class="fn-bar-telemetry">
+            <span class="fn-sync" id="fn-sync" aria-live="polite"></span>
+            <span class="fn-count" id="fn-word-count">0 words</span>
+            <span class="fn-read" id="fn-read-time"></span>
+          </div>
+
+          <div class="fn-bar-actions" id="fn-bar-actions">
+            <!-- Compact only: the one door to every insert source. The dock's
+                 six labelled shortcuts are the wide-screen version of it. -->
+            <button class="fn-btn fn-btn--insert" onclick="fnOpenDrawer('frames')" title="Insert a frame, a day, a picture, a video or a track">
+              <span class="fn-g">⊕</span><span class="fn-l">INSERT</span>
+            </button>
+            <button class="fn-btn" id="fn-preview-btn" onclick="fnTogglePreview()" aria-expanded="false" title="See it rendered (⌘P)">
+              <span class="fn-g">◫</span><span class="fn-l">PREVIEW</span>
+            </button>
+            <button class="fn-btn" onclick="fnStage('draft')" title="Save now — autosave already runs while you type (⌘S)">
+              <span class="fn-l">SAVE</span>
+            </button>
+            <button class="fn-btn fn-btn--stage" onclick="fnStage('published')" title="Stage this note for publish (⌘↵)">
+              <span class="fn-g">▲</span><span class="fn-l">STAGE</span>
+            </button>
+            <button class="fn-btn fn-btn--icon" id="fn-menu-btn" onclick="fnToggleMenu()"
+                    aria-haspopup="true" aria-expanded="false" aria-label="More editor controls">⋯</button>
+          </div>
+        </header>
+
+        <!-- ---- 2. THE CANVAS ---------------------------------------------
+             The one scrolling box. Its bottom padding clears the floating dock
+             so the last line you write is never underneath it. -->
+        <!-- The stage: the writing and everything that floats over it. The
+             preview panel is positioned against THIS rather than the view, so
+             it slides across the manuscript and leaves SAVE / ▲ STAGE reachable
+             in the bar above — you decide it looks right and stage it, without
+             closing anything first. -->
+        <div class="fn-stage">
+          <div class="fn-canvas" id="fn-canvas">
+            <article class="fn-manuscript">
+
+              <!-- Cover. The dropzone IS the picture: empty it is a shallow
+                   dashed band, filled it is the banner with its controls on the
+                   glass. (id + dataset are the contract fn-editor.js writes to.) -->
+              <div class="fn-hero" id="fn-hero-slot" title="Drop a picture here, or click to choose one">
+                <input type="file" id="fn-hero-input" class="dz-hidden-input" accept="image/*">
+                <img class="fn-hero-img" id="fn-hero-thumb" style="display:none;" alt="">
+                <div class="fn-hero-empty" id="fn-hero-empty">
+                  <span class="fn-hero-empty-line"><span class="accent">+</span>&nbsp; DROP A COVER IMAGE</span>
+                  <span class="fn-hero-empty-alt">
+                    <button class="fn-chip" onclick="event.stopPropagation(); openAssetLibrary(assetToHero, 'archive')">◎ LIBRARY</button>
+                    <button class="fn-chip" onclick="event.stopPropagation(); RawLens.open('fnhero')" title="Pick a cover frame out of a RAW card">◇ RAW</button>
+                  </span>
+                </div>
+                <div class="fn-hero-controls" id="fn-hero-controls">
+                  <span class="fn-hero-name" id="fn-hero-name" style="display:none;"></span>
+                  <span class="fn-hero-tools">
+                    <button class="fn-chip fn-chip--onmedia" id="fn-hero-focal" style="display:none;"
+                            onclick="event.stopPropagation(); openFnFocal()" title="Set the crop centre used by the thumbnail and the social card">◎ FOCAL</button>
+                    <!-- Shown only when a cover exists: with no picture the
+                         homepage falls back to the text tile anyway, so an
+                         opt-in you could still switch on would be lying. -->
+                    <button class="fn-chip fn-chip--onmedia" id="fn-hero-card" style="display:none;" aria-pressed="false"
+                            onclick="event.stopPropagation(); fnToggleHeroCard()" title="Lead the homepage card with this picture instead of the text tile">▢ HERO CARD</button>
+                    <!-- No inline handler: init.js owns this one (it has to
+                         stopPropagation before the dropzone sees the click). -->
+                    <button class="fn-chip fn-chip--onmedia" id="fn-hero-clear" style="display:none;" title="Remove the cover">✕ REMOVE</button>
+                  </span>
+                </div>
+              </div>
+
+              <input type="text" class="fn-title" id="fn-title"
+                     placeholder="Give this note a title" autocomplete="off">
+
+              <!-- One inline row, not a four-field form. There is nothing left
+                   here worth a collapse toggle — which is why the old TITLE ▾
+                   button is gone rather than restyled. -->
+              <div class="fn-meta">
+                <label class="fn-meta-field">
+                  <span class="fn-meta-label"><span class="accent">//</span> ID</span>
+                  <input class="fn-meta-input fn-meta-input--id" id="fn-id" placeholder="on publish" size="11"
+                         autocomplete="off" title="Left blank, a number is claimed when the note is staged for publish">
+                </label>
+                <label class="fn-meta-field">
+                  <span class="fn-meta-label">PLACE</span>
+                  <!-- Value comes from site.config location.name (SITE_LOCATION,
+                       js/console/assets.js); the markup carries no place name. -->
+                  <input class="fn-meta-input fn-meta-input--place" id="fn-location" placeholder="Location" size="16" autocomplete="off">
+                </label>
+                <label class="fn-meta-field">
+                  <span class="fn-meta-label">DATE</span>
+                  <!-- Deliberately a text field, not type="date": a fork can
+                       carry imported posts whose date isn't ISO, and a date
+                       input silently blanks what it can't parse — which the very
+                       next autosave would then write back as empty. -->
+                  <input class="fn-meta-input fn-meta-input--date" id="fn-date" placeholder="YYYY-MM-DD" size="11"
+                         inputmode="numeric" autocomplete="off">
+                </label>
+                <span class="fn-meta-state" id="fn-status-badge"></span>
+              </div>
+
+              <!-- Grows with what you write (fn-editor.js `_fnAutoGrow`), so the
+                   page scrolls and the box never does. That is what keeps the
+                   caret visible over an on-screen keyboard for free. -->
+              <textarea class="fn-body" id="fn-body" spellcheck="true" placeholder="Start writing.
+
+  Markdown works: **bold**, *italics*, # a heading, --- for a break.
+  Type f#42 to cite frame 42 from the buffer.
+  Drop a picture straight onto the page to place it here.
+  Paste an Apple Music link and it becomes a player.
+
+  Capture first. Process later."></textarea>
+            </article>
+          </div>
+
+          <!-- ---- 3. THE DOCK -----------------------------------------------
+               Six sources, one row, labels and all. Hidden on compact screens,
+               where ⊕ INSERT in the bar opens the same drawer instead — so no
+               source is ever reachable from two controls at once. -->
+          <div class="fn-dock" id="fn-dock" role="toolbar" aria-label="Insert into this note">
+            <button class="fn-tool" id="fn-frames-btn" onclick="fnOpenDrawer('frames')" title="Cite frames from the buffer, or drop a strip of them">▦ FRAMES</button>
+            <button class="fn-tool" id="fn-dates-btn" onclick="fnOpenDrawer('days')" title="Embed a whole day out of the buffer">▤ DAYS</button>
+            <span class="fn-dock-rule" aria-hidden="true"></span>
+            <button class="fn-tool" onclick="openAssetLibrary(assetToPostBody, 'archive', true)" title="Place a picture from the asset library">◎ PICTURE</button>
+            <button class="fn-tool" onclick="openAssetLibrary(assetToPostVideo, 'videos')" title="Place a looping video banner">▷ VIDEO</button>
+            <button class="fn-tool" onclick="fnInsertMusic()" title="Paste an Apple Music share link or embed code">♫ MUSIC</button>
+            <!-- Same ingest as the Audio shelf: the track lands in the one
+                 registry and its shortcode drops at the cursor. Two in a row
+                 become a tracklist. -->
+            <button class="fn-tool" onclick="fnAttachAudio()" title="Attach your own audio — it lands on the Audio shelf and plays here">♪ AUDIO</button>
+          </div>
+
+          <!-- ---- OVERLAY: the preview. Slides in over the manuscript on a wide
+               screen, covers it on a phone. Renders only while open — a closed
+               panel costs nothing per keystroke, which the old always-live split
+               pane could not say. -->
+          <aside class="fn-preview" id="fn-preview-panel" role="region" aria-label="Rendered preview" hidden>
+            <header class="fn-preview-hdr">
+              <span class="fn-preview-ttl"><span class="accent">◫</span> AS IT WILL READ</span>
+              <span class="fn-preview-hdr-tools">
+                <button class="fn-chip" onclick="fnPreview()" title="Open the real published page in a new tab — the faithful check">↗ REAL PAGE</button>
+                <button class="fn-chip" onclick="fnClosePreview()" aria-label="Close preview">✕</button>
               </span>
+            </header>
+            <div class="fn-preview-body">
+              <div class="fn-render" id="fn-preview"></div>
             </div>
-          </div>
-          <div class="fn-frontmatter">
-            <div class="field">
-              <label class="field-label">FN ID</label>
-              <input class="field-input" id="fn-id" placeholder="auto-assigned on publish">
-            </div>
-            <div class="field">
-              <label class="field-label">Title</label>
-              <input class="field-input" id="fn-title" placeholder="WHATEVER YOU SAW">
-            </div>
-            <div class="field">
-              <label class="field-label">Location</label>
-              <!-- Value comes from site.config location.name (SITE_LOCATION,
-                   js/console/assets.js); the markup carries no place name. -->
-              <input class="field-input" id="fn-location" placeholder="Location">
-            </div>
-            <div class="field">
-              <label class="field-label">Date</label>
-              <input class="field-input" id="fn-date" placeholder="2026-05-02">
-            </div>
-          </div>
-          <div class="fn-hero-slot" id="fn-hero-slot">
-            <input type="file" id="fn-hero-input" class="dz-hidden-input" accept="image/*">
-            <div class="fn-hero-empty" id="fn-hero-empty">
-              <span class="accent">+</span>&nbsp;&nbsp;DROP HERO IMAGE&nbsp;&nbsp;
-              <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation(); openAssetLibrary(assetToHero, 'archive')" style="margin-left: 12px; padding: 3px 8px; font-size: 0.55rem;">◎ LIBRARY</button>
-              <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation(); RawLens.open('fnhero')" style="margin-left: 6px; padding: 3px 8px; font-size: 0.55rem;" title="Pick a hero frame from a RAW card">◇ RAW</button>
-            </div>
-            <img class="fn-hero-thumb" id="fn-hero-thumb" style="display:none;" alt="">
-            <div class="fn-hero-name" id="fn-hero-name" style="display:none;"></div>
-            <button class="btn btn-sm btn-ghost" id="fn-hero-focal" style="display:none; padding:3px 8px; font-size:0.55rem;" onclick="event.stopPropagation(); openFnFocal()" title="Set the thumbnail / OG-card focal point">◎ FOCAL</button>
-            <button class="fn-hero-clear" id="fn-hero-clear" style="display:none;" title="Remove hero">×</button>
-          </div>
-          <div class="fn-buffer-dates-panel" id="fn-buffer-dates-panel" style="display:none;"></div>
-          <div class="fn-frame-browser" id="fn-frame-browser" style="display:none;"></div>
-          <div class="fn-editor-area">
-            <textarea id="fn-body" placeholder="# Field note begins here
-
-Write the body in Markdown. Use **red emphasis** for *key phrases*.
-
-Paste an Apple Music link (iPad share sheet) or embed code anywhere to load the player.
-
-The image attached above the post lives at /assets/posts/{id}-hero.jpg
-
-Use --- to separate sections.
-
-Capture first. Process later."></textarea>
-          </div>
-        </div>
-
-        <!-- No "RENDERED PREVIEW" caption. A pane you cannot type into, sitting
-             beside one you can, explains itself the moment you type — and on a
-             tablet that label was spending the width that cut ▲ STAGE POST in
-             half. The name survives for screen readers on the region itself,
-             where it costs no pixels. -->
-        <div class="preview-pane" role="region" aria-label="Rendered preview">
-          <div class="fn-pane-hdr fn-pane-hdr--actions">
-            <div style="display: flex; gap: 8px;">
-              <button class="btn btn-sm btn-ghost" onclick="fnPreview()">PREVIEW</button>
-              <button class="btn btn-sm btn-ghost" onclick="fnStage('draft')">SAVE DRAFT</button>
-              <button class="btn btn-sm btn-stage" onclick="fnStage('published')">▲ STAGE POST</button>
-            </div>
-          </div>
-          <div class="fn-preview-area">
-            <div class="fn-render" id="fn-preview"></div>
-          </div>
-        </div>
+          </aside>
+        </div><!-- /.fn-stage -->
       </div>
+
+      <!-- ---- OVERLAY: the ⋯ menu. The controls you reach for once a session,
+           kept out of a row that has to survive a 320px screen. -->
+      <div class="fn-menu" id="fn-menu" role="menu" hidden>
+        <button class="fn-menu-item" role="menuitem" onclick="fnMenuRun('focus')">
+          <span class="fn-menu-mark">◎</span> Focus mode <kbd>Esc to exit</kbd>
+        </button>
+        <button class="fn-menu-item" role="menuitem" onclick="fnMenuRun('realpreview')">
+          <span class="fn-menu-mark">↗</span> Open the real page <kbd>new tab</kbd>
+        </button>
+        <button class="fn-menu-item fn-menu-item--band" id="fn-bar-toggle" role="menuitem" onclick="fnMenuRun('tabbar')" aria-pressed="false">
+          <span class="fn-menu-mark">▾</span>
+          <span class="fn-bar-toggle-label">Hide the bottom nav</span>
+          <kbd>more rows</kbd>
+        </button>
+        <span class="fn-menu-rule" aria-hidden="true"></span>
+        <button class="fn-menu-item fn-menu-item--danger" id="fn-delete-btn" role="menuitem" style="display:none;" onclick="fnMenuRun('delete')">
+          <span class="fn-menu-mark">⌫</span> Delete this note
+        </button>
+      </div>
+
     </section>
 
     <section class="view" id="view-wall">
@@ -632,6 +734,27 @@ Capture first. Process later."></textarea>
         <div class="archive-list" id="audio-display"></div>
       </div>
     </section>
+    <!-- CARDS — the homepage grid, twice: what it holds now and what the next
+         publish will make it. The tiles are SCHEMATIC (console tokens, not
+         css/main.css) but the composition is not a guess: js/console/cards.js
+         runs the homepage's own selection logic — the classic recent-index.js
+         loaded in <head> — over both sets of inputs. The STAGED column is
+         actionable and the LIVE one deliberately is not: there is nothing to
+         change about what is already published, and every edit shows up beside
+         it as a marker flipping. -->
+    <section class="view" id="view-cards">
+      <div class="view-header">
+        <div>
+          <div class="view-title">CARDS <em>HOMEPAGE</em></div>
+          <div class="view-sub">// WHAT THE GRID HOLDS NOW · WHAT THE NEXT PUBLISH MAKES IT</div>
+        </div>
+        <div class="view-meta">
+          <div><span class="accent">EDIT THE STAGED SIDE</span></div>
+          <div>THE REAL SELECTION LOGIC</div>
+        </div>
+      </div>
+      <div id="cards-body"></div>
+    </section>
     <!-- PULSE — the one view in this console that is bounded to the viewport
          rather than scrolling like a document. Its header is deliberately
          thinner than every other view's: the studio canvas below claims the
@@ -705,37 +828,37 @@ Capture first. Process later."></textarea>
       </div>
 
       <div class="publish-summary">
-        <div class="summary-card" id="sum-buffer">
+        <div class="summary-card" id="sum-buffer" onclick="publishToggleChanges('buffer')">
           <div class="label">Buffer</div>
           <div class="count" id="sum-count-buffer">0</div>
           <div class="delta" id="sum-delta-buffer"></div>
         </div>
-        <div class="summary-card" id="sum-archive">
+        <div class="summary-card" id="sum-archive" onclick="publishToggleChanges('archive')">
           <div class="label">Archive</div>
           <div class="count" id="sum-count-archive">0</div>
           <div class="delta" id="sum-delta-archive"></div>
         </div>
-        <div class="summary-card" id="sum-fn">
+        <div class="summary-card" id="sum-fn" onclick="publishToggleChanges('fn')">
           <div class="label">FN// Posts</div>
           <div class="count" id="sum-count-fn">0</div>
           <div class="delta" id="sum-delta-fn"></div>
         </div>
-        <div class="summary-card" id="sum-wall">
+        <div class="summary-card" id="sum-wall" onclick="publishToggleChanges('wall')">
           <div class="label">Wall</div>
           <div class="count" id="sum-count-wall">0</div>
           <div class="delta" id="sum-delta-wall"></div>
         </div>
-        <div class="summary-card" id="sum-barrel">
+        <div class="summary-card" id="sum-barrel" onclick="publishToggleChanges('barrel')">
           <div class="label">Barrel</div>
           <div class="count" id="sum-count-barrel">0</div>
           <div class="delta" id="sum-delta-barrel"></div>
         </div>
-        <div class="summary-card" id="sum-network">
+        <div class="summary-card" id="sum-network" onclick="publishToggleChanges('network')">
           <div class="label">Network</div>
           <div class="count" id="sum-count-network">0</div>
           <div class="delta" id="sum-delta-network"></div>
         </div>
-        <div class="summary-card" id="sum-audio">
+        <div class="summary-card" id="sum-audio" onclick="publishToggleChanges('audio')">
           <div class="label">Audio</div>
           <div class="count" id="sum-count-audio">0</div>
           <div class="delta" id="sum-delta-audio"></div>
@@ -745,6 +868,10 @@ Capture first. Process later."></textarea>
           <div class="count" id="sum-count-library">0</div>
         </div>
       </div>
+
+      <!-- The per-surface change list: tap a card with a +N ▲ delta and its
+           staged changes render here by name (from STATE.stagedLog). -->
+      <div id="publish-changes-panel" class="publish-changes" style="display:none;"></div>
 
       <div class="import-zone">
         <h4>REMOTE SYNC</h4>
@@ -925,6 +1052,52 @@ Capture first. Process later."></textarea>
 </div>
 
 <!-- ============ MORE SHEET (secondary surfaces) ============ -->
+<!-- ---- OVERLAY: the insert drawer. Three tabs, because six was a row
+     that could not survive a phone: two buffer pickers and one list of
+     the surfaces that own their own modal. Built on the console's shared
+     .sheet-overlay/.sheet pair (chrome.js openSheet/closeSheet), so it
+     gets the scrim, the spring and the grabber drag every other sheet
+     in here already has — rather than a fourth way to present a panel. -->
+<div class="sheet-overlay hidden" id="fn-drawer" onclick="if(event.target===this)fnCloseDrawer()">
+  <div class="sheet fn-drawer" role="dialog" aria-label="Insert into this note">
+    <div class="modal-grabber" aria-hidden="true"></div>
+    <header class="fn-drawer-hdr">
+      <div class="fn-drawer-tabs" role="tablist">
+        <button class="fn-drawer-tab" id="fn-tab-frames" role="tab" aria-selected="false" onclick="fnDrawerTab('frames')">FRAMES</button>
+        <button class="fn-drawer-tab" id="fn-tab-days" role="tab" aria-selected="false" onclick="fnDrawerTab('days')">DAYS</button>
+        <button class="fn-drawer-tab" id="fn-tab-media" role="tab" aria-selected="false" onclick="fnDrawerTab('media')">MEDIA</button>
+      </div>
+      <button class="fn-chip" onclick="fnCloseDrawer()" aria-label="Close">✕</button>
+    </header>
+
+    <!-- The two buffer pickers render into these (fnRenderFrameBrowser /
+         fnRenderBufferDates). Same ids they have always had. -->
+    <div class="fn-drawer-pane" id="fn-frame-browser" role="tabpanel" aria-labelledby="fn-tab-frames" hidden></div>
+    <div class="fn-drawer-pane" id="fn-buffer-dates-panel" role="tabpanel" aria-labelledby="fn-tab-days" hidden></div>
+
+    <!-- The surfaces that own their own modal. Listed rather than hidden
+         behind glyphs, because this pane is the only place a compact
+         screen can reach them. -->
+    <div class="fn-drawer-pane fn-drawer-pane--media" id="fn-media-pane" role="tabpanel" aria-labelledby="fn-tab-media" hidden>
+      <button class="fn-media-row" onclick="fnCloseDrawer(); openAssetLibrary(assetToPostBody, 'archive', true)">
+        <span class="fn-media-mark">◎</span>
+        <span class="fn-media-txt"><b>Picture</b><small>from the asset library — pick several and they place as a strip</small></span>
+      </button>
+      <button class="fn-media-row" onclick="fnCloseDrawer(); openAssetLibrary(assetToPostVideo, 'videos')">
+        <span class="fn-media-mark">▷</span>
+        <span class="fn-media-txt"><b>Video banner</b><small>a short loop, muted, full width</small></span>
+      </button>
+      <button class="fn-media-row" onclick="fnCloseDrawer(); fnInsertMusic()">
+        <span class="fn-media-mark">♫</span>
+        <span class="fn-media-txt"><b>Apple Music</b><small>paste a share link or the embed code</small></span>
+      </button>
+      <button class="fn-media-row" onclick="fnCloseDrawer(); fnAttachAudio()">
+        <span class="fn-media-mark">♪</span>
+        <span class="fn-media-txt"><b>Your own audio</b><small>lands on the Audio shelf and plays inside the note</small></span>
+      </button>
+    </div>
+  </div>
+</div>
 <div class="sheet-overlay hidden" id="more-sheet" onclick="if(event.target===this)closeMoreSheet()">
   <div class="sheet" role="menu" aria-label="More surfaces">
     <div class="sheet-grabber"></div>
@@ -948,6 +1121,9 @@ Capture first. Process later."></textarea>
     <button class="sheet-item" data-view="audio" onclick="sheetGo('audio')">
       <span class="sheet-icon">♪</span> Audio
       <span class="sheet-count" id="sheet-count-audio">0</span>
+    </button>
+    <button class="sheet-item" data-view="cards" onclick="sheetGo('cards')">
+      <span class="sheet-icon">▥</span> Cards
     </button>
     <button class="sheet-item" data-view="pulse" onclick="sheetGo('pulse')">
       <span class="sheet-icon">☺</span> Pulse
@@ -1275,27 +1451,29 @@ Capture first. Process later."></textarea>
   "imports": {
     "/js/console-telemetry.js": "/js/console-telemetry.js?v=2",
     "/js/console-api.js":       "/js/console-api.js?v=11",
-    "/js/console-state.js":     "/js/console-state.js?v=8",
-    "/js/console-ui.js":        "/js/console-ui.js?v=61",
-    "/js/console/chrome.js":    "/js/console/chrome.js?v=10",
+    "/js/console-state.js":     "/js/console-state.js?v=10",
+    "/js/console-ui.js":        "/js/console-ui.js?v=62",
+    "/js/console/chrome.js":    "/js/console/chrome.js?v=12",
     "/js/console/assets.js":    "/js/console/assets.js?v=4",
     "/js/console/utils.js":     "/js/console/utils.js?v=2",
     "/js/console/sync.js":      "/js/console/sync.js?v=1",
-    "/js/console/upload.js":    "/js/console/upload.js?v=2",
-    "/js/console/more-views.js": "/js/console/more-views.js?v=4",
-    "/js/console/archive.js":   "/js/console/archive.js?v=2",
-    "/js/console/buffer.js":    "/js/console/buffer.js?v=2",
-    "/js/console/fn-editor.js": "/js/console/fn-editor.js?v=4",
-    "/js/console/focal.js":     "/js/console/focal.js?v=3",
-    "/js/console/asset-library.js": "/js/console/asset-library.js?v=1",
-    "/js/console/audio.js":     "/js/console/audio.js?v=6",
-    "/js/console/publish.js":   "/js/console/publish.js?v=9",
+    "/js/console/upload.js":    "/js/console/upload.js?v=3",
+    "/js/console/more-views.js": "/js/console/more-views.js?v=5",
+    "/js/console/archive.js":   "/js/console/archive.js?v=3",
+    "/js/console/buffer.js":    "/js/console/buffer.js?v=3",
+    "/js/console/fn-editor.js": "/js/console/fn-editor.js?v=7",
+    "/js/console/focal.js":     "/js/console/focal.js?v=6",
+    "/js/console/asset-library.js": "/js/console/asset-library.js?v=2",
+    "/js/console/audio.js":     "/js/console/audio.js?v=7",
+    "/js/console/cards.js":     "/js/console/cards.js?v=2",
+    "/js/console/publish.js":   "/js/console/publish.js?v=14",
     "/js/console/session.js":   "/js/console/session.js?v=8",
     "/js/console/bench.js":     "/js/console/bench.js?v=1",
-    "/js/pulse-packs.js":       "/js/pulse-packs.js?v=2",
-    "/js/console/pulse.js":     "/js/console/pulse.js?v=2",
-    "/js/console/init.js":      "/js/console/init.js?v=8",
+    "/js/pulse-packs.js":       "/js/pulse-packs.js?v=3",
+    "/js/console/pulse.js":     "/js/console/pulse.js?v=4",
+    "/js/console/init.js":      "/js/console/init.js?v=10",
     "/js/markdown-engine.js":   "/js/markdown-engine.js?v=4",
+    "/js/recent-index.js":      "/js/recent-index.js?v=16",
     "/js/jpeg-privacy.js":      "/js/jpeg-privacy.js?v=1",
     "/js/raw-lens.js":          "/js/raw-lens.js?v=5",
     "/js/raw-extract.js":       "/js/raw-extract.js?v=4",

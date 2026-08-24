@@ -23,11 +23,11 @@ import { _libraryUploadsPending } from './upload.js';
 import { renderWall, renderBarrel, renderNetwork, renderLibrary, wallIngest, libraryIngest } from './more-views.js';
 import { renderArchive, archiveIngestPhoto, archiveUpdatePreview, restoreGearMemory, setGearRemember } from './archive.js';
 import { renderBuffer, bufferIngest, bufferPromote, bufferRemove, burstLinkMode, burstToggleFrame, enterBurstLinkMode, exitBurstLinkMode } from './buffer.js';
-import { renderFN, fnHeroIngest, fnHeroClear, fnSetupEnhancements, _applyFnFrontmatter } from './fn-editor.js';
+import { renderFN, fnHeroIngest, fnHeroClear, fnSetupEnhancements, fnCloseDrawer } from './fn-editor.js';
 import { FocalModal, bufferFocal, loadOgCards } from './focal.js';
 import { closeAssetLibrary } from './asset-library.js';
 import { renderAudio, audioAddFiles } from './audio.js';
-import { _pulseCloseLog } from './pulse.js';
+import { _pulseCloseLog, _pulseCloseTray } from './pulse.js';
 import { renderPublish, syncFromServer } from './publish.js';
 import { checkAuth, closeSettings, _updateSettingsDots, _checkSessionExpiry, _initOfflineIndicator, applyInstancePosture, _wireRingJoin, maybeShowWelcome } from './session.js';
 import { renderBench } from './bench.js';
@@ -73,7 +73,13 @@ export function registerSurfaces() {
     onLeave: () => { if (burstLinkMode) exitBurstLinkMode(); },
   });
   registerView("archive", renderArchive);
-  registerView("fn",      renderFN);
+  registerView("fn", {
+    render: renderFN,
+    // The insert drawer is a modal sheet and lives OUTSIDE the view (it has to
+    // — .layout carries a z-index, so a sheet inside it renders under the tab
+    // bar). Nothing hides it when you navigate away, so close it here.
+    onLeave: fnCloseDrawer,
+  });
   registerView("wall",    renderWall);
   registerView("barrel",  renderBarrel);
   registerView("friends", renderNetwork);
@@ -98,7 +104,6 @@ export function registerSurfaces() {
 
 export function init() {
   registerSurfaces();
-  _applyFnFrontmatter();
   load();
   themeInit();
   restoreSidebar();
@@ -127,6 +132,7 @@ export function init() {
   _wireSheetDrag("asset-library-modal", closeAssetLibrary);
   _wireSheetDrag("more-sheet", closeMoreSheet);
   _wireSheetDrag("pulse-log-sheet", _pulseCloseLog);
+  _wireSheetDrag("fn-drawer", fnCloseDrawer);
 
   let _lastFocusSync = 0;
   checkAuth();
@@ -235,6 +241,13 @@ export function init() {
     if (!document.getElementById("action-sheet")?.classList.contains("hidden")) { closeActionSheet(); return; }
     if (!document.getElementById("more-sheet")?.classList.contains("hidden")) { closeMoreSheet(); return; }
     if (!document.getElementById("pulse-log-sheet")?.classList.contains("hidden")) { _pulseCloseLog(); return; }
+    // The glyph menu is a panel, not a sheet, so it reads `.open` rather than
+    // `.hidden` — but it is the topmost thing on the Pulse stage when it is up,
+    // and Escape should reach it before anything underneath.
+    if (document.getElementById("pulse-tray")?.classList.contains("open")) { _pulseCloseTray(); return; }
+    // The FN insert drawer is a sheet too — but fn-editor.js owns its Escape
+    // (it unwinds the ⋯ menu and the preview panel in the same press), so this
+    // one only has to not swallow the key on the way past.
     if (burstLinkMode) { exitBurstLinkMode(); return; }
   });
 }

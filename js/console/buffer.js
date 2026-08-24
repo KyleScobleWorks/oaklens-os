@@ -15,7 +15,7 @@
 //
 // Extracted from console-ui.js 2026-07-29. See dev/console-module-plan.md.
 
-import { STATE, save, bumpStage, trashItem, _pendingR2Deletes } from '../console-state.js';
+import { STATE, save, stageChange, trashItem, _pendingR2Deletes } from '../console-state.js';
 import { getToken } from '../console-api.js';
 import { showToast, startProgress, updateProgress, endProgress } from '../console-telemetry.js';
 import { toast, showView } from './chrome.js';
@@ -104,7 +104,7 @@ export async function bufferIngest(files) {
         archived: false,
         hash,
       });
-      bumpStage('buffer');
+      stageChange('buffer', { id: entryId, label: `${rawName} — new frame (local only)`, kind: 'add' });
       save();
       renderBuffer();
     }
@@ -160,7 +160,7 @@ export function bufferRetire(id) {
       entryId: item.id,
     });
   }
-  bumpStage('buffer');
+  stageChange('buffer', { id: item.id, label: `${item.filename || 'frame'} — retired to dark frame`, kind: 'remove' });
   save();
   renderBuffer();
   toast('◼ retired to dark frame — slot kept, media queued for delete', 'success');
@@ -348,7 +348,7 @@ export function loadSampleBuffer() {
       filename: `sample-${s.time.replace(":","")}.jpg`,
       captured_at: d.toISOString(), published_at: d.toISOString(), archived: false,
     });
-    bumpStage("buffer");
+    stageChange("buffer", { id: STATE.buffer[0].id, label: `${STATE.buffer[0].filename} — sample frame`, kind: 'add' });
   });
   save();
   renderBuffer();
@@ -466,7 +466,13 @@ export function commitBurstLink() {
   STATE.buffer.forEach(b => {
     if (burstSelectedIds.has(b.id)) { b.burst_id = burstId; count++; }
   });
-  if (count) bumpStage("buffer");   // marks PENDING + persists to localStorage
+  // marks PENDING + persists to localStorage; every linked frame changed
+  if (count) {
+    stageChange("buffer", {
+      ids: [...burstSelectedIds],
+      label: `burst linked: ${count} frames → ${burstId}`,
+    });
+  }
   toast(`✓ linked burst: ${count} frames → ${burstId}`, "success");
   exitBurstLinkMode();
 }
@@ -474,10 +480,16 @@ export function commitBurstLink() {
 export function commitBurstUnlink() {
   if (!burstSelectedIds.size) return;
   let count = 0;
+  const unlinkedIds = [];
   STATE.buffer.forEach(b => {
-    if (burstSelectedIds.has(b.id) && b.burst_id) { delete b.burst_id; count++; }
+    if (burstSelectedIds.has(b.id) && b.burst_id) { delete b.burst_id; count++; unlinkedIds.push(b.id); }
   });
-  if (count) bumpStage("buffer");
+  if (count) {
+    stageChange("buffer", {
+      ids: unlinkedIds,
+      label: `burst unlinked: ${count} frame${count !== 1 ? 's' : ''}`,
+    });
+  }
   toast(`✓ unlinked ${count} frame${count !== 1 ? "s" : ""}`, "success");
   exitBurstLinkMode();
 }

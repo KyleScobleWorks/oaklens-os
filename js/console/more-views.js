@@ -15,7 +15,7 @@
 //
 // Extracted from console-ui.js 2026-07-29. See dev/console-module-plan.md.
 
-import { STATE, save, bumpStage, trashItem } from '../console-state.js';
+import { STATE, save, stageChange, trashItem } from '../console-state.js';
 import { getToken } from '../console-api.js';
 import { showToast, startProgress, updateProgress, endProgress, logEvent } from '../console-telemetry.js';
 import { toast, escapeHTML } from './chrome.js';
@@ -129,7 +129,7 @@ export async function libraryIngest(files) {
         hash: hash,
         added_at: todayISO(),
       });
-      bumpStage('library');
+      stageChange('library', { id: entryId, label: `${rawName} — new (local only)`, kind: 'add' });
       save();
       renderLibrary();
     }
@@ -349,7 +349,7 @@ export async function wallIngest(files) {
         added_at: todayISO(),
         hash,
       });
-      bumpStage('wallpapers');
+      stageChange('wallpapers', { id: entryId, label: `${sanitizeWallTitle(file.name)} — new (local only)`, kind: 'add' });
       save();
       renderWall();
     }
@@ -401,7 +401,7 @@ export function wallAdd() {
     w.title = title;
     w.desc = desc;
     wallEditId = null;
-    bumpStage("wallpapers");
+    stageChange("wallpapers", { id: w.id, label: `${title} — updated` });
     save();
     ["wall-url","wall-title","wall-desc"].forEach(id => document.getElementById(id).value = "");
     const btn = document.querySelector('#view-wall .btn-stage');
@@ -417,7 +417,7 @@ export function wallAdd() {
   // NEW MODE
   if (!filename) return toast("filename + title required", "error");
   STATE.wallpapers.unshift({ id: uid(), filename, title, desc, isNew: true, added_at: todayISO() });
-  bumpStage("wallpapers");
+  stageChange("wallpapers", { id: STATE.wallpapers[0].id, label: `${title} — new`, kind: 'add' });
   save();
   ["wall-url","wall-title","wall-desc"].forEach(id => document.getElementById(id).value = "");
   renderWall();
@@ -426,7 +426,11 @@ export function wallAdd() {
 
 export function wallToggleNew(id) {
   const w = STATE.wallpapers.find(w => w.id === id);
-  if (w) { w.isNew = !w.isNew; bumpStage("wallpapers"); save(); renderWall(); }
+  if (w) {
+    w.isNew = !w.isNew;
+    stageChange("wallpapers", { id: w.id, label: `${w.title || w.filename} — NEW badge ${w.isNew ? 'on' : 'off'}` });
+    save(); renderWall();
+  }
 }
 export function wallRemove(id) {
   trashItem("wallpapers", id);
@@ -494,7 +498,7 @@ export function upsertAutoBarrel({ source, ref, date, title, url }) {
       id: uid(), type: "auto", source, ref, date, title, url,
       added_at: todayISO(),
     });
-    bumpStage("barrel");
+    stageChange("barrel", { id: STATE.barrel[0].id, label: `${title} — auto entry`, kind: 'add' });
   }
 }
 
@@ -539,7 +543,7 @@ export function barrelAdd() {
     b.title = title;
     b.url = url || b.url;
     barrelEditId = null;
-    bumpStage("barrel");
+    stageChange("barrel", { id: b.id, label: `${title} — updated` });
     save();
     ["barrel-date","barrel-title","barrel-url"].forEach(id => document.getElementById(id).value = "");
     const btn = document.querySelector('#view-barrel .btn-stage');
@@ -561,7 +565,8 @@ export function barrelAdd() {
     url: url || "#",
     added_at: todayISO(),
   });
-  bumpStage("barrel"); save();
+  stageChange("barrel", { id: STATE.barrel[0].id, label: `${title} — new`, kind: 'add' });
+  save();
   ["barrel-date","barrel-title","barrel-url"].forEach(id => document.getElementById(id).value = "");
   renderBarrel();
   toast(`✓ ${title} added (manual)`, "success");
@@ -627,7 +632,7 @@ export function networkAdd() {
     f.location = location;
     f.url = url;
     networkEditId = null;
-    bumpStage("friends");
+    stageChange("friends", { id: f.id, label: `${name} — updated` });
     save();
     ["friends-name","friends-tag","friends-location","friends-url"].forEach(id => document.getElementById(id).value = "");
     const btn = document.querySelector('#view-friends .btn-stage');
@@ -649,7 +654,8 @@ export function networkAdd() {
     url,
     added_at: todayISO(),
   });
-  bumpStage("friends"); save();
+  stageChange("friends", { id: STATE.friends[0].id, label: `${name} — new node`, kind: 'add' });
+  save();
   ["friends-name","friends-tag","friends-location","friends-url"].forEach(id => document.getElementById(id).value = "");
   renderNetwork();
   toast(`✓ ${name} added`, "success");
@@ -719,7 +725,7 @@ export function listNudge(listKey, id, dir) {
   if (i < 0 || j < 0 || j >= arr.length) return;
   const [item] = arr.splice(i, 1);
   arr.splice(j, 0, item);
-  bumpStage(listKey);
+  stageChange(listKey, { id: item.id, label: `${item.title || item.filename || 'entry'} — reordered` });
   save();
   (listKey === "wallpapers" ? renderWall : renderBarrel)();
 }
@@ -748,7 +754,7 @@ export function wireListDrag(containerId, listKey) {
       const toIdx = arr.findIndex(x => x.id === targetId);
       const [item] = arr.splice(fromIdx, 1);
       arr.splice(toIdx, 0, item);
-      bumpStage(listKey);
+      stageChange(listKey, { id: item.id, label: `${item.title || item.filename || 'entry'} — reordered` });
       save();
       const renderer = listKey === "wallpapers" ? renderWall : renderBarrel;
       renderer();

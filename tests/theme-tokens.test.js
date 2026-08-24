@@ -157,10 +157,16 @@ describe('the console derives its brand rather than hardcoding it', () => {
   });
 
   it('the rendered preview takes its accent from a token, not a hex', () => {
-    const start = consoleCss.indexOf('.fn-preview-area');
+    // The preview proxies the PUBLIC page, which is dark whatever mode the
+    // console is in, so it pins the dark palette locally. Pinning the MODE is
+    // right; pinning the BRAND was not — an aperture site previewed its // marks
+    // in noir red. (Renamed .fn-preview-area → .fn-preview-body in the 2026-08-23
+    // studio rewrite, when the split pane became a slide-over panel.)
+    const start = consoleCss.indexOf('.fn-preview-body');
+    expect(start, '.fn-preview-body — the preview palette pin — is missing').toBeGreaterThan(-1);
     const body = consoleCss.slice(start, consoleCss.indexOf('}', start));
     const accent = body.match(/--accent:\s*([^;]+);/);
-    expect(accent, '.fn-preview-area still pins its own --accent').toBeTruthy();
+    expect(accent, '.fn-preview-body still pins its own --accent').toBeTruthy();
     expect(accent[1].trim(), 'pin the dark MODE, derive the BRAND').toMatch(/^var\(--/);
   });
 

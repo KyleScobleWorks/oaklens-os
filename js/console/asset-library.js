@@ -19,7 +19,7 @@
 //
 // Extracted from console-ui.js 2026-07-29. See dev/console-module-plan.md.
 
-import { STATE, save, bumpStage } from '../console-state.js';
+import { STATE, save, stageChange } from '../console-state.js';
 import { appleMusicEmbedSrc, appleMusicIframe } from '../markdown-engine.js';
 import { toast, escapeHTML, escapeAttrJS, hideOverlay } from './chrome.js';
 import { CDN_BASE, cdnThumb, isVideoAsset } from './assets.js';
@@ -403,7 +403,7 @@ export function assetToBuffer(filename) {
     archived: false,
     _uploaded: true,  // already on CDN
   });
-  bumpStage('buffer');
+  stageChange('buffer', { id: STATE.buffer[0].id, label: `${filename} — new frame (from library)`, kind: 'add' });
   save();
   renderBuffer();
 }

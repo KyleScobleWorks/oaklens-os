@@ -892,6 +892,39 @@ html {
   .ed-caret { animation: none; opacity: 0.9; }
 }
 
+/* ---- field-note card · HERO layout (data-layout="hero") ----
+   The card engine's first real layout (docs/cards-console-vision.md §3). It is
+   opt-in per post, so the typographic tile above stays exactly as it was for
+   every note that doesn't ask for this.
+
+   Hero-FORWARD, not "newsy": the picture does the visual work and the note's
+   identity rides on the same on-media chip the archive and RAW cards wear,
+   rather than a headline stamped across the photograph. That is also the whole
+   scrim story — .wk-tag already carries its own (translucent plate + blur,
+   theme-independent because it sits on a photo, not on the page) and nothing
+   else on this card touches the image, so there is no per-preset legibility
+   tuning to get wrong.
+
+   Structurally the card becomes the photo tile: the text tile's padded,
+   centred, --surface-2 shell resets to .wk-card's own ground and .wk-img
+   supplies the 4:5 crop. Every value here is a theme token, so all five
+   presets and both modes come out right without a colour being named. */
+.wk-text[data-layout="hero"] {
+  padding: 0;
+  gap: 0;
+  background: var(--surface);
+  justify-content: flex-start;
+}
+
+/* The one thing kept from the text tile: a note's title is prose where a
+   frame's is a label, so it keeps the display face instead of taking
+   .wk-title's uppercase meta voice — at caption scale under the picture. */
+.wk-text[data-layout="hero"] .wk-t-title {
+  font-size: 0.92rem;
+  line-height: 1.16;
+  letter-spacing: -0.005em;
+}
+
 @media (max-width: 900px) {
   .cl-workgrid { grid-template-columns: 1fr 1fr; }
   /* Show 4th card on tablet to form a perfect 2x2 grid */

@@ -206,7 +206,7 @@ export function _initKeyboardInsets() {
 // ============== VIEW ROUTING ==============
 // Views reachable only through the More sheet — the More tab lights up as
 // their proxy in the tab bar.
-const MORE_VIEWS = ["wall", "barrel", "friends", "library", "audio", "pulse", "bench"];
+const MORE_VIEWS = ["wall", "barrel", "friends", "library", "audio", "cards", "pulse", "bench"];
 
 // Surfaces register themselves; the router does not know them by name. Each
 // entry is { render, onLeave? } — `render` draws the view, `onLeave` cleans up
@@ -365,16 +365,25 @@ export function _wireSheetDrag(overlayId, closeFn) {
 export function refreshStageIndicators() {
   const total = totalStaged();
   const btn = document.getElementById("publish-btn");
-  const badge = document.getElementById("publish-badge");
   const stat = document.getElementById("topbar-stage-stat");
   const pip = document.getElementById("nav-stage-pip");
-  badge.textContent = total;
+  // The topbar button is a STATUS LIGHT: lit or unlit, no number. It is a
+  // wayfinding control in the corner furthest from a thumb, and as the card
+  // system adds change types its count only grew more abstract — "17" tells
+  // you nothing you can act on. The number still has two honest homes: the
+  // status strip beside it (glanceable telemetry, desktop) and the tab-bar
+  // badge on touch, where the tab bar owns publish and there is no strip.
+  // The itemised answer lives on the publish page itself.
   if (total > 0) {
     btn.classList.remove("empty");
+    btn.dataset.pending = "1";
+    btn.setAttribute("aria-label", `Publish — ${total} pending change${total === 1 ? '' : 's'}`);
     stat.innerHTML = `<span class="accent">${total} PENDING</span>`;
     pip.style.display = "block";
   } else {
     btn.classList.add("empty");
+    btn.dataset.pending = "0";
+    btn.setAttribute("aria-label", "Publish — no pending changes");
     stat.textContent = "NO PENDING CHANGES";
     pip.style.display = "none";
   }

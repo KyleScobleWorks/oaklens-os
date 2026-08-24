@@ -14,7 +14,7 @@
 //
 // Extracted from console-ui.js 2026-07-29. See dev/console-module-plan.md.
 
-import { STATE, save, bumpStage } from '../console-state.js';
+import { STATE, save, stageChange } from '../console-state.js';
 import { getToken, uploadFiles, fetchOgCards } from '../console-api.js';
 import { toast } from './chrome.js';
 import { CDN_BASE, cdnThumb, SITE_NAME, SITE_WORDMARK_STEM, SITE_WORDMARK_ACCENT } from './assets.js';
@@ -22,7 +22,7 @@ import { ymd } from './utils.js';
 import { renderBuffer, _setOgCardSet, _addOgCard } from './buffer.js';
 import { archiveEditId, archiveComposeFocus, archiveComposeCardFocus, _setArchiveComposeFocus, _setArchiveComposeCardFocus, renderArchive } from './archive.js';
 import { renderWall } from './more-views.js';
-import { fnCurrentId, fnMarkDirty } from './fn-editor.js';
+import { fnCurrentId, fnMarkDirty, getBufferFrameNumbers } from './fn-editor.js';
 
 // ============== FOCAL POINT PICKER ==============
 // A reusable modal that sets a per-image "focal point" — Squarespace-style.
@@ -259,6 +259,12 @@ export const FocalModal = (() => {
 // Convenience wrapper used by every surface's entry point.
 export function openFocalModal(opts) { FocalModal.open(opts); }
 
+// Ledger labels want the citable frame number ("f#241"), same zero-padding as
+// every surface that prints one.
+function _frameLabel(id) {
+  return `f#${String(getBufferFrameNumbers().get(id) || 0).padStart(3, '0')}`;
+}
+
 // ---- Per-surface entry points ----
 
 export function openArchiveFocal() {
@@ -291,7 +297,8 @@ export function openArchiveFocal() {
       // entry yet, so it stays transient and gets applied when archiveStage() creates it.
       if (a) {
         if (focus) a.focus = focus; else delete a.focus;
-        bumpStage('archive'); save(); renderArchive();
+        stageChange('archive', { id: a.id, label: `${a.title || 'archive entry'} — focal point` });
+        save(); renderArchive();
         toast('✓ focal point set — publish archive to update the thumbnail', 'success');
       } else {
         toast('✓ focal point set — applies on stage', 'success');
@@ -320,7 +327,8 @@ export function openArchiveCardFocal() {
       _setArchiveComposeCardFocus(focus);
       if (a) {
         if (focus) a.cardFocus = focus; else delete a.cardFocus;
-        bumpStage('archive'); save(); renderArchive();
+        stageChange('archive', { id: a.id, label: `${a.title || 'archive entry'} — card crop` });
+        save(); renderArchive();
         toast('✓ card crop set — publish archive to update the homepage card', 'success');
       } else {
         toast('✓ card crop set — applies on stage', 'success');
@@ -346,7 +354,8 @@ export function bufferFocal(id) {
     },
     onSave: f => {
       if (f === '50% 50%') delete p.focus; else p.focus = f;
-      bumpStage('buffer'); save(); renderBuffer();
+      stageChange('buffer', { id: p.id, label: `${_frameLabel(p.id)} — focal point` });
+      save(); renderBuffer();
       toast('✓ focal point set', 'success');
     },
   });
@@ -354,26 +363,69 @@ export function bufferFocal(id) {
 
 // Feature a raw buffer frame ("daily") on the homepage as a "RAW · f#NNN" card.
 // Opt-in per frame — the buffer is raw and large, so nothing shows on the front
-// page unless the owner flags it. The homepage caps the display to one RAW card
-// (newest featured wins); featuring more just queues them for when we open it up.
+// page unless the owner flags it. EXCLUSIVE: the homepage shows exactly one RAW
+// card, so starring a frame un-stars the previous one in the same gesture.
+// (The old model left every flag set and let the server's newest-captured-first
+// sort pick a winner — starring an OLDER frame then visibly did nothing while
+// two ★ badges glowed. The server keeps that tolerant sort for legacy data;
+// the console write path is where exclusivity lives.) The displaced frame keeps
+// its cardFocus — a saved card crop makes it one tap to re-feature — and is
+// remembered below so a mis-star is one tap to reverse.
+let _lastFeaturedSwap = null;   // { newId, prevId } from the most recent displacing star
+
+// Getter, not a bare export: the console's window bridge snapshots exports at
+// boot, so inline handlers (and cards-view code) must read this through a call.
+export function getLastFeaturedSwap() { return _lastFeaturedSwap; }
+
 export function toggleBufferFeatured(id) {
   const p = STATE.buffer.find(x => x.id === id);
   if (!p || p.dark) return;
   if (p.featured) {
     delete p.featured;
-    bumpStage('buffer'); save(); renderBuffer();
+    // One gesture, one staged change — +1, NOT -1, and never a tally of
+    // featured frames. STATE.staged counts UNPUBLISHED CHANGES; a decrement
+    // model clamps at 0 and wedges publish (see _audioPromote in audio.js for
+    // the incident this rule comes from).
+    stageChange('buffer', { id: p.id, label: `${_frameLabel(p.id)} — unfeatured`, kind: 'feature' });
+    save(); renderBuffer();
     toast('☆ unfeatured — off the homepage on next publish', 'success');
   } else {
+    let prev = null;
+    for (const f of STATE.buffer) {
+      if (f !== p && f.featured) {
+        if (!prev) prev = f;        // at most one exists on the new model; keep the first for the toast
+        delete f.featured;          // sweep them all regardless (legacy multi-featured data)
+      }
+    }
     p.featured = true;
-    bumpStage('buffer'); save(); renderBuffer();
-    toast('★ featured as RAW card — set the 4:5 card crop (▯), then publish', 'success');
+    _lastFeaturedSwap = prev ? { newId: p.id, prevId: prev.id } : null;
+    // The whole swap (un-star previous + star new) is ONE gesture → ONE bump —
+    // but the ledger row names BOTH ids: the frame that lost the star changed
+    // too, and sync must protect it the same way.
+    stageChange('buffer', prev
+      ? { ids: [p.id, prev.id], label: `RAW card: ${_frameLabel(p.id)} ← ${_frameLabel(prev.id)}`, kind: 'feature' }
+      : { id: p.id, label: `${_frameLabel(p.id)} — featured as RAW card`, kind: 'feature' });
+    save(); renderBuffer();
+    if (prev) {
+      const num = getBufferFrameNumbers().get(prev.id);
+      toast(`★ featured as RAW card — replaced f#${String(num || 0).padStart(3, '0')}; set the 4:5 card crop (▯), then publish`, 'success');
+    } else {
+      toast('★ featured as RAW card — set the 4:5 card crop (▯), then publish', 'success');
+    }
   }
 }
 
 // The 4:5 homepage RAW card is a tall crop, so a featured frame gets its own
 // `cardFocus` (parity with archive's ◎ CARD CROP). Falls back to the frame's
 // thumbnail focus when unset; recent-index.js reads `cardFocus || focus`.
-export function bufferCardFocal(id) {
+//
+// `after` is an optional callback run once the crop is saved. The modal is
+// asynchronous and closes back onto whichever surface opened it, so a caller
+// that is NOT the buffer needs a way to repaint itself — the Cards view opens
+// this from a tile that previews the very crop being set (js/console/cards.js).
+// Optional and additive: every existing call site passes nothing and behaves
+// exactly as before.
+export function bufferCardFocal(id, after) {
   const p = STATE.buffer.find(x => x.id === id);
   if (!p || !p.filename) return;
   openFocalModal({
@@ -382,8 +434,10 @@ export function bufferCardFocal(id) {
     aspect: '4 / 5',
     onSave: f => {
       if (f === '50% 50%') delete p.cardFocus; else p.cardFocus = f;
-      bumpStage('buffer'); save(); renderBuffer();
+      stageChange('buffer', { id: p.id, label: `${_frameLabel(p.id)} — card crop` });
+      save(); renderBuffer();
       toast('✓ card crop set — publish to update the homepage card', 'success');
+      if (typeof after === 'function') after();
     },
   });
 }
@@ -423,7 +477,8 @@ export function wallFocal(id) {
     card,
     onSave: f => {
       if (f === '50% 50%') delete w.focus; else w.focus = f;
-      bumpStage('wallpapers'); save(); renderWall();
+      stageChange('wallpapers', { id: w.id, label: `${w.title || w.filename || 'wallpaper'} — focal point` });
+      save(); renderWall();
       toast('✓ focal point set', 'success');
     },
   });

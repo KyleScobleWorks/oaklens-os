@@ -330,7 +330,9 @@ describe('staging counts changes, not things', () => {
     // `trashRestore` cancels a pending DELETION when you put a published item
     // back. Those undo a staged change rather than making a new one, which is
     // the opposite of what a surface's toggle does. Everything else — every
-    // feature, edit, clear and switch — is +1.
+    // feature, edit, clear and switch — is +1. `stageChange` (the ledger-row
+    // wrapper around bumpStage) is scanned the same way: a surface must not
+    // sneak a negative in via its `delta` meta either.
     const LEDGER = 'js/console-state.js';
     const offenders = [];
     for (const file of walk(join(ROOT, 'js'), '.js')) {
@@ -338,6 +340,11 @@ describe('staging counts changes, not things', () => {
       const src = readFileSync(join(ROOT, file), 'utf8');
       // bumpStage('x', -1) · bumpStage('x', -count) · bumpStage('x', n ? 1 : -1)
       for (const m of src.matchAll(/bumpStage\s*\([^)]*?-\s*[A-Za-z0-9_]/g)) {
+        const line = src.slice(0, m.index).split('\n').length;
+        offenders.push(`${file}:${line} — ${m[0].trim()}`);
+      }
+      // stageChange('x', { ..., delta: -1 }) — same law through the wrapper.
+      for (const m of src.matchAll(/stageChange\s*\([^)]*?delta:\s*-/g)) {
         const line = src.slice(0, m.index).split('\n').length;
         offenders.push(`${file}:${line} — ${m[0].trim()}`);
       }

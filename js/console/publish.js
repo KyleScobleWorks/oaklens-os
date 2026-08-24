@@ -25,10 +25,10 @@
 //
 // Extracted from console-ui.js 2026-07-29. See dev/console-module-plan.md.
 
-import { STATE, save, clearStage, totalStaged, sessionTrash, trashItem, dropTrashForDeletedR2, _pendingR2Deletes, setPendingR2Deletes } from '../console-state.js';
+import { STATE, save, clearStage, totalStaged, stagedIdsFor, sessionTrash, trashItem, dropTrashForDeletedR2, _pendingR2Deletes, setPendingR2Deletes } from '../console-state.js';
 import { publishFiles, syncFiles, deleteAssets, fetchDrafts, isLoggedIn, isNotConfigured } from '../console-api.js';
 import { showToast, logEvent, startProgress, endProgress } from '../console-telemetry.js';
-import { toast, refreshStageIndicators } from './chrome.js';
+import { toast, refreshStageIndicators, escapeHTML } from './chrome.js';
 import { getSyncedSha, setSyncedSha } from './assets.js';
 import { ymd } from './utils.js';
 import { scheduleLibrarySync, updatePurgeR2Button, _librarySyncFailed } from './sync.js';
@@ -104,7 +104,83 @@ export function renderPublish() {
   });
   // Library auto-syncs — it has no staged delta, so just show the current count.
   document.getElementById('sum-count-library').textContent = STATE.library.length;
+  _renderChangesPanel();
   renderTrash();
+}
+
+// ============== THE CHANGE PANEL — what a card's "+N ▲" actually is ==============
+// Tapping a summary card with staged changes expands one shared panel under the
+// grid listing that surface's ledger rows by name (STATE.stagedLog). Inline
+// expand rather than a popover on purpose: no anchoring math on the iPad band,
+// no outside-tap dismissal to wire, and the console's list-row vocabulary
+// already fits. Library and pulse never appear here — library auto-syncs and
+// pulse is live D1; neither is on the publish path.
+
+// The summary grid's tile keys predate the ledger and don't all match STATE
+// keys (fn→posts, wall→wallpapers, network→friends) — bridge, don't rename:
+// the ids are load-bearing in tests and markup.
+const SURFACE_BY_TILE = {
+  buffer: 'buffer', archive: 'archive', fn: 'posts',
+  wall: 'wallpapers', barrel: 'barrel', network: 'friends', audio: 'audio',
+};
+const _KIND_GLYPH = { add: '+', edit: 'Δ', remove: '×', feature: '★' };
+
+let _openChangesTile = null;   // which tile's list is expanded, or null
+
+export function publishToggleChanges(tileKey) {
+  const surface = SURFACE_BY_TILE[tileKey];
+  if (!surface) return;
+  // A card with nothing staged has nothing to expand; a tap there only ever
+  // collapses an open panel.
+  if (_openChangesTile !== tileKey && !(STATE.staged[surface] > 0)) return;
+  _openChangesTile = _openChangesTile === tileKey ? null : tileKey;
+  _renderChangesPanel();
+}
+
+export function _renderChangesPanel() {
+  const panel = document.getElementById('publish-changes-panel');
+  if (!panel) return;
+
+  // Keep the tile highlight honest even while collapsed.
+  for (const [tile, surface] of Object.entries(SURFACE_BY_TILE)) {
+    const card = document.getElementById(`sum-${tile}`);
+    if (card) card.classList.toggle('changes-open', _openChangesTile === tile);
+    // A cleared surface (publish, Clear Staged, restores) closes its own panel.
+    if (_openChangesTile === tile && !(STATE.staged[surface] > 0)) _openChangesTile = null;
+  }
+
+  if (!_openChangesTile) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    const open = document.querySelector('.summary-card.changes-open');
+    if (open) open.classList.remove('changes-open');
+    return;
+  }
+
+  const surface = SURFACE_BY_TILE[_openChangesTile];
+  const rows = STATE.stagedLog
+    .filter((r) => r.surface === surface)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+  // Gestures the ledger has no row for — unmigrated call paths, or rows shed
+  // past LEDGER_CAP. The counters stay authoritative; this line keeps the
+  // panel's math honest against them.
+  const counted = rows.reduce((sum, r) => sum + (r.n || 1), 0);
+  const uncounted = Math.max(0, (STATE.staged[surface] || 0) - counted);
+
+  const rowHtml = rows.map((r) => `
+    <div class="pc-row">
+      <span class="pc-glyph pc-${escapeHTML(r.kind || 'edit')}">${_KIND_GLYPH[r.kind] || 'Δ'}</span>
+      <span class="pc-label">${escapeHTML(r.label || '')}</span>
+      ${r.n > 1 ? `<span class="pc-n">×${r.n}</span>` : ''}
+    </div>`).join('');
+
+  panel.innerHTML = `
+    <div class="pc-head">${escapeHTML(_openChangesTile.toUpperCase())} · staged changes</div>
+    ${rowHtml || ''}
+    ${uncounted ? `<div class="pc-row pc-other"><span class="pc-glyph">Δ</span><span class="pc-label">+${uncounted} other change${uncounted === 1 ? '' : 's'}</span></div>` : ''}
+  `;
+  panel.style.display = 'block';
 }
 
 export function buildBundle() {
@@ -113,7 +189,20 @@ export function buildBundle() {
     // it would point at a CDN object that doesn't exist (blank/404). The gates
     // in publishToServer/publishExportBundle block on this too; this is the
     // last-line guarantee.
-    "data/buffer.json":    JSON.stringify(STATE.buffer.filter(b => !b._uploadError && !b._uploading).map(b => ({
+    "data/buffer.json":    JSON.stringify(STATE.buffer.filter(b => !b._uploadError && !b._uploading).map(b => {
+      // A dark frame is a tombstone (manual §5.20): its slot and number are
+      // kept forever, but its media was deleted from R2 on retire. Emit ONLY
+      // the tombstone fields — the id, the positional sort keys (captured_at +
+      // filename) that fix its number, and the dark flags. Running it through
+      // the live-frame whitelist below would DROP `dark`/`darked_at` (they
+      // aren't in it) and republish the frame as a live cell pointing at gone
+      // media — a retire that silently un-retires on the next publish.
+      if (b.dark) return {
+        id: b.id, filename: b.filename, captured_at: b.captured_at,
+        dark: true, darked_at: b.darked_at,
+        ...(b.burst_id ? { burst_id: b.burst_id } : {}),
+      };
+      return {
       id: b.id, filename: b.filename,
       captured_at: b.captured_at, published_at: b.published_at,
       added_at: b.added_at,
@@ -129,7 +218,8 @@ export function buildBundle() {
       // featured: surfaces this frame as a RAW card on the homepage. Both are
       // omitted when unset so unfeatured frames stay byte-identical to before.
       ...(b.featured ? { featured: true } : {}),
-    })), null, 2),
+      };
+    }), null, 2),
     "data/archive.json":   JSON.stringify(STATE.archive.filter(a => !a._uploadError && !a._uploading).map(a => ({
       id: a.id, filename: a.filename, slug: a.slug,
       title: a.title, sub: a.sub, location: a.location,
@@ -148,6 +238,10 @@ export function buildBundle() {
       buffer_dates: p.buffer_dates || null,
       added_at: p.added_at,
       ...(p.focus ? { focus: p.focus } : {}),
+      // The homepage card descriptor (card: { layout }). Conditional like every
+      // other optional flag, so a note that never opted in stays byte-identical
+      // in the published JSON.
+      ...(p.card ? { card: p.card } : {}),
     })), null, 2),
     "data/wallpapers.json": JSON.stringify(STATE.wallpapers.filter(w => !w._uploadError && !w._uploading).map(w => ({
       id: w.id,
@@ -420,7 +514,16 @@ export function _vouchedEmptyManifests() {
 
 export function importIntoSurface(surface, data) {
   if (!Array.isArray(data)) return;
-  STATE[surface] = STATE[surface].filter(e => !e._imported);
+  // Keep local-only entries AND imported entries carrying ledger-tracked
+  // unpublished edits — for those, the local copy is the only one holding the
+  // edit, and replacing it with main's is exactly the 2026-08-23 settings
+  // loss. Local-dirty wins whole-entry, deliberately: no field merge. True
+  // concurrent divergence (two devices on the same entry) still surfaces loud
+  // at publish time as a stale-base conflict instead of silently half-merging.
+  // A dirty entry deleted on main survives too — the pending local change
+  // wins until it publishes (which re-adds the entry).
+  const dirty = stagedIdsFor(surface);
+  STATE[surface] = STATE[surface].filter(e => !e._imported || dirty.has(e.id));
 
   const existingIds = new Set(STATE[surface].map(e => e.id));
   // An item sitting in the session trash is a pending deletion, not a gap to
@@ -442,7 +545,11 @@ export function importIntoSurface(surface, data) {
 
 export function clearImported() {
   ["buffer", "archive", "posts", "wallpapers", "barrel", "friends", "library", "audio"].forEach(surface => {
-    STATE[surface] = STATE[surface].filter(e => !e._imported);
+    // Same dirty-entry protection as importIntoSurface: "clear imported data"
+    // means "drop what main can give back", and main cannot give back an
+    // unpublished local edit.
+    const dirty = stagedIdsFor(surface);
+    STATE[surface] = STATE[surface].filter(e => !e._imported || dirty.has(e.id));
   });
   save();
   refreshStageIndicators();
@@ -550,6 +657,18 @@ export function _githubHint(message) {
 
 export let _syncPendingReconnect = false;   // an offline-deferred sync — rerun on reconnect
 
+// The last main revision whose snapshot this session fully imported — or, right
+// after a publish, the commit this session just created (its in-memory state IS
+// that snapshot). When a sync comes back stamped with the same sha, the import
+// pass is skipped: main hasn't moved past what we already hold, so there is
+// nothing to pull, and re-importing would only re-run the wholesale
+// replace-by-remote that used to eat local edits (see importIntoSurface).
+// Deliberately in-memory, never persisted: a fresh page load starts at null and
+// always hydrates from the first sync.
+let _lastImportedSha = null;
+export function _setLastImportedSha(sha) { _lastImportedSha = sha; }
+export function _getLastImportedSha() { return _lastImportedSha; }
+
 export async function syncFromServer() {
   const statusEl = document.getElementById('sync-status');
   if (!isLoggedIn()) {
@@ -596,19 +715,34 @@ export async function syncFromServer() {
     // (github-down says its piece once, below — a disarmed-guard warning under
     // a link that is down entirely would be noise pointing at the wrong thing.)
 
+    // Main hasn't moved past the snapshot this session already holds → nothing
+    // to import. Skipping matters beyond saving work: importIntoSurface replaces
+    // imported entries with the remote copy, so a redundant import is where
+    // local edits used to get eaten (focus-sync after an edit, the old
+    // post-publish re-sync).
+    const upToDate = !!data.headSha && data.headSha === _lastImportedSha;
+
     const results = [];
-    for (const { file, surface } of surfaces) {
-      const entry = data.files[file];
-      if (!entry || !entry.ok) {
-        console.warn(`[sync] ${file}:`, entry?.error);
-        continue;
+    if (!upToDate) {
+      for (const { file, surface } of surfaces) {
+        const entry = data.files[file];
+        if (!entry || !entry.ok) {
+          console.warn(`[sync] ${file}:`, entry?.error);
+          continue;
+        }
+        const content = entry.content;
+        if (surface === 'posts') {
+          content.forEach(p => { if (p.hero && !p.hero_filename) p.hero_filename = p.hero; });
+        }
+        importIntoSurface(surface, content);
+        results.push(`${surface}:${content.length}`);
       }
-      const content = entry.content;
-      if (surface === 'posts') {
-        content.forEach(p => { if (p.hero && !p.hero_filename) p.hero_filename = p.hero; });
-      }
-      importIntoSurface(surface, content);
-      results.push(`${surface}:${content.length}`);
+      // Only a complete snapshot is worth remembering: if any surface didn't
+      // import (a per-file failure, or a fresh fork's legitimate 404s), the
+      // next sync must run the import pass again, so the marker stays cleared
+      // rather than vouching for state we only partly hold.
+      _lastImportedSha =
+        (data.headSha && results.length === surfaces.length) ? data.headSha : null;
     }
 
     // Cloud drafts (D1) — fetched separately from the GitHub-backed surfaces and
@@ -647,11 +781,19 @@ export async function syncFromServer() {
       refreshStageIndicators();
       renderBuffer(); renderArchive(); renderFN();
       renderWall(); renderBarrel(); renderNetwork(); renderLibrary(); renderAudio(); renderPublish();
-      if (statusEl) statusEl.textContent =
-        `✓ synced ${new Date().toLocaleTimeString()} · ${results.join(' · ')}`;
-      logEvent(`✓ sync · ${results.join(' · ')}`, 'info');
-      toast('✓ Synced from GitHub main', 'success');
+      // An up-to-date sync that still lands here only merged drafts (D1) —
+      // say that, not "synced from main": no GitHub-backed surface moved.
+      if (statusEl) statusEl.textContent = upToDate
+        ? `✓ up to date (${data.headSha.slice(0, 7)}) · ${results.join(' · ')}`
+        : `✓ synced ${new Date().toLocaleTimeString()} · ${results.join(' · ')}`;
+      logEvent(`✓ sync · ${upToDate ? `up to date (${data.headSha.slice(0, 7)}) · ` : ''}${results.join(' · ')}`, 'info');
+      if (!upToDate) toast('✓ Synced from GitHub main', 'success');
       updatePurgeR2Button();
+    } else if (upToDate) {
+      const short = data.headSha.slice(0, 7);
+      if (statusEl) statusEl.textContent =
+        `✓ up to date (${short}) · ${new Date().toLocaleTimeString()}`;
+      logEvent(`✓ sync · up to date (${short})`, 'info');
     } else {
       if (statusEl) statusEl.textContent = '⚠ sync failed — no data returned';
     }
@@ -718,8 +860,13 @@ export async function publishToServer() {
     logLine('▸ Committing to GitHub via worker…');
     const data = await publishFiles(files, getSyncedSha(), _vouchedEmptyManifests());
     // main == this commit now — advance the base so the next publish isn't
-    // flagged stale against the revision we just superseded.
+    // flagged stale against the revision we just superseded. Same for the
+    // import marker: this session's in-memory state IS the snapshot at
+    // data.sha, so a sync stamped with it has nothing to teach us — and for a
+    // few seconds GitHub's contents API may still serve the PREVIOUS commit,
+    // which is how a post-publish sync used to revert fresh focal/pin edits.
     setSyncedSha(data.sha);
+    _lastImportedSha = data.sha;
 
     // WHAT HAPPENS NEXT DEPENDS ON THE REPO, so say the one that is true.
     // This line used to promise "Cloudflare Pages deploying (~30s)" after every
@@ -773,7 +920,7 @@ export async function publishToServer() {
     // and re-synced (which finally tagged it _imported). Marking here closes that gap.
     // (_imported is stripped from the published JSON in buildBundle, so this never
     // leaks into committed data; save() drops these from localStorage and the
-    // post-publish sync below re-imports them as the canonical copy.)
+    // next login sync re-imports them as the canonical copy.)
     ['buffer', 'archive', 'wallpapers', 'barrel', 'library'].forEach(surface => {
       STATE[surface].forEach(e => { e._imported = true; });
     });
@@ -792,7 +939,12 @@ export async function publishToServer() {
         `<span class="publish-receipt">▲ PUBLISHED · ${hhmm} · ${data.sha.slice(0, 7)}</span>`;
     }
     toast('✓ Published! Deploy in progress…', 'success');
-    setTimeout(syncFromServer, 2500);
+    // No follow-up sync here, deliberately. Local state is canonical for the
+    // commit we just made (we hold its sha from the ref update), so there is
+    // nothing to pull — and the +2.5s sync this used to schedule read GitHub's
+    // eventually-consistent contents API, which could still serve the previous
+    // commit and wholesale-revert edits made since (or the publish itself).
+    // That was the "set focal point, publish, settings didn't take" bug.
 
   } catch (err) {
     if (err.status === 401) {

@@ -19,7 +19,7 @@
 //
 // Extracted from console-ui.js 2026-07-29. See dev/console-module-plan.md.
 
-import { STATE, save, bumpStage, trashItem, _pendingR2Deletes } from '../console-state.js';
+import { STATE, save, stageChange, trashItem, _pendingR2Deletes } from '../console-state.js';
 import { getToken, uploadFilesWithRetry } from '../console-api.js';
 import { toast, escapeHTML } from './chrome.js';
 import { cdnThumb, generateVariants, _resizeToWebP } from './assets.js';
@@ -393,7 +393,7 @@ export function archiveStage() {
     }
     delete view.dataset.uploadState;   // consumed — the upload is referenced by the entry now
 
-    bumpStage("archive");
+    stageChange("archive", { id: a.id, label: `${title} — updated` });
     save();
     archiveClear();
     renderArchive();
@@ -430,7 +430,7 @@ export function archiveStage() {
   }
   delete view.dataset.uploadState;   // consumed — the entry now carries the state
   STATE.archive.unshift(entry);
-  bumpStage("archive");
+  stageChange("archive", { id: entry.id, label: `${title} — new entry`, kind: 'add' });
   // Auto-barrel entry
   upsertAutoBarrel({
     source: "archive",

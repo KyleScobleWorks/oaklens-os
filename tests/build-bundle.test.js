@@ -32,6 +32,14 @@ function seedState() {
     },
     // minimal: every optional field absent
     { id: 'buf-2', filename: 'f2.jpg', captured_at: '2026-01-04', published_at: null, added_at: '2026-01-04', archived: true },
+    // a retired frame (dark tombstone). It still carries stale live fields in
+    // memory (published_at/archived/featured/hash) — buildBundle must emit ONLY
+    // the tombstone shape, or a publish silently un-retires it over gone media.
+    {
+      id: 'buf-dark', filename: 'gone.jpg', captured_at: '2026-01-05',
+      dark: true, darked_at: '2026-02-01T00:00:00.000Z', burst_id: 'burst-2026-01-05-001',
+      published_at: '2026-01-06', archived: false, featured: true, hash: 'stale', _imported: true,
+    },
     { id: 'buf-err', filename: 'bad.jpg', _uploadError: true },       // filtered
     { id: 'buf-up', filename: 'busy.jpg', _uploading: true },         // filtered
   ];
@@ -48,7 +56,7 @@ function seedState() {
     {
       id: 'p-1', fn_id: 'fn-001', title: 'Post One', location: 'Loc', date: '2026-03-01',
       hero_filename: 'hero.jpg', body: 'Body text', buffer_dates: '2026-01-02', added_at: '2026-03-01',
-      focus: '50% 50%', status: 'published',
+      focus: '50% 50%', status: 'published', card: { layout: 'hero' },
     },
     // no status at all is treated as published; hero comes from `hero` when it
     // is not an inline data: URL
@@ -123,6 +131,24 @@ describe('buildBundle()', () => {
     ]);
   });
 
+  it('a dark frame publishes as a tombstone, never resurrected as a live cell', () => {
+    // The bug this guards: buildBundle ran every buffer frame through the
+    // live-frame whitelist, which has no `dark`/`darked_at` — so retiring a
+    // published frame and then publishing dropped the tombstone flags and
+    // re-listed it as a live frame pointing at R2 media that retire deleted.
+    const dark = parse('data/buffer.json').find((b) => b.id === 'buf-dark');
+    expect(Object.keys(dark).sort()).toEqual([
+      'burst_id', 'captured_at', 'dark', 'darked_at', 'filename', 'id',
+    ]);
+    expect(dark.dark).toBe(true);
+    expect(dark.darked_at).toBe('2026-02-01T00:00:00.000Z');
+    // the stale live fields it still held in memory must NOT be republished —
+    // emitting any of them is exactly the un-retirement.
+    for (const k of ['published_at', 'added_at', 'archived', 'featured', 'hash']) {
+      expect(k in dark, `dark frame must not republish live field ${k}`).toBe(false);
+    }
+  });
+
   it('archive keeps every whitelisted field', () => {
     expect(keysOf('data/archive.json')).toEqual([
       'added_at', 'camera', 'cardFocus', 'filename', 'focus', 'hash', 'id',
@@ -132,8 +158,19 @@ describe('buildBundle()', () => {
 
   it('posts keep every whitelisted field', () => {
     expect(keysOf('data/posts.json')).toEqual([
-      'added_at', 'body', 'buffer_dates', 'date', 'fn_id', 'focus', 'hero', 'id', 'location', 'title',
+      'added_at', 'body', 'buffer_dates', 'card', 'date', 'fn_id', 'focus', 'hero', 'id', 'location', 'title',
     ]);
+  });
+
+  // The homepage card descriptor rides the same conditional-spread rule as
+  // every other optional flag: a note that never opted into a layout must come
+  // out of the serializer exactly as it went in, or an untouched published
+  // posts.json grows a key on the next publish.
+  it('posts carry the card descriptor only when one was chosen', () => {
+    const posts = parse('data/posts.json');
+    expect(posts[0].card).toEqual({ layout: 'hero' });
+    expect('card' in posts[1]).toBe(false);
+    expect('card' in posts[2]).toBe(false);
   });
 
   it('wallpapers keep every whitelisted field', () => {
@@ -165,7 +202,7 @@ describe('buildBundle()', () => {
 
   it('never publishes a frame or audio track whose upload failed or is still running', () => {
     // A committed frame pointing at a CDN object that does not exist renders blank.
-    expect(parse('data/buffer.json').map((b) => b.id)).toEqual(['buf-1', 'buf-2']);
+    expect(parse('data/buffer.json').map((b) => b.id)).toEqual(['buf-1', 'buf-2', 'buf-dark']);
     expect(parse('data/archive.json').map((a) => a.id)).toEqual(['arc-1', 'arc-2']);
     expect(parse('data/wallpapers.json').map((w) => w.id)).toEqual(['w-1', 'w-2']);
     expect(parse('data/library.json').map((l) => l.id)).toEqual(['l-1', 'l-2']);
@@ -218,7 +255,7 @@ describe('buildBundle()', () => {
   it('reports per-surface counts in the manifest', () => {
     const m = bundle['MANIFEST.txt'];
     expect(m).toMatch(/^OAKLENS BUNDLE · \d{4}-\d{2}-\d{2}T/);
-    expect(m).toMatch(/data\/buffer\.json\s+4 entries \(1 imported \+ 3 new\)/);
+    expect(m).toMatch(/data\/buffer\.json\s+5 entries \(2 imported \+ 3 new\)/);
     expect(m).toMatch(/data\/archive\.json\s+3 entries/);
     expect(m).toMatch(/data\/friends\.json\s+2 nodes/);
     expect(m).toMatch(/data\/library\.json\s+3 entries/);

@@ -1,7 +1,7 @@
 // OAKLENS // FIELD CONSOLE — the barrel.
 //
 // This file used to be the console: ~5,600 lines of every surface, modal and
-// handler. It is now the seam between the console's sixteen modules and the
+// handler. It is now the seam between the console's eighteen modules and the
 // page that loads them, and holds no logic of its own.
 //
 // Two jobs:
@@ -60,6 +60,8 @@ export * from './console/focal.js';
 export * from './console/asset-library.js';
 // the audio shelf: one registry, waveform measured at attach, promote-to-card
 export * from './console/audio.js';
+// the Cards view: the homepage grid, LIVE vs STAGED, run through its own logic
+export * from './console/cards.js';
 // bundle + commit to main, sync down, exports, the publish view
 export * from './console/publish.js';
 // auth, the Settings sheet, expiry warning, offline indicator

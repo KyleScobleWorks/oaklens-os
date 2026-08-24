@@ -25,6 +25,243 @@ resources. Keep yours. [setup.md](setup.md) has the exact commands.
 
 ---
 
+## 2026-08-24 (dark-frame fix)
+
+**Fixed: retiring a frame now sticks after you publish.** When you retire a
+published frame to a **dark frame** (it keeps its slot and number, but its
+image is removed), that "retired" state used to be dropped the next time you
+published — the frame came back as a *live* cell pointing at a photo that no
+longer exists, so it rendered blank. Publish now keeps the dark-frame marker,
+so a retired frame stays retired. Nothing for you to do — just merge.
+
+---
+
+## 2026-08-24 (the Cards view)
+
+**New: a Cards view in your console that shows the homepage before you publish
+it.** Open **Cards** in the console sidebar. It shows your homepage's card grid
+twice, side by side: **what's on it right now**, and **what it will be after
+your next publish** — with the slots that change marked (`NEW`, `REPLACED`,
+`UNCHANGED`, `GONE`). No more "star something, publish, open the homepage, and
+only then find out." The pulse card shows up too, marked as already-live so you
+know it isn't waiting on a publish.
+
+It isn't a mock-up of the logic — it *is* the logic. The preview runs the exact
+code your public homepage uses to choose and order its cards, so what you see is
+what you'll get, down to which card lands in which slot.
+
+**New: star, crop and take a card down from the card itself.** The staged side
+is interactive. On a photo card: `★ UNSTAR` to pull it off the homepage, or
+`▯ CROP` to set the tall crop the card uses. On an audio card: take one track
+off, or clear the whole card. Every one of these does exactly what the same
+button does elsewhere in the console — it's the same action, now reachable from
+the card you're looking at instead of three views away.
+
+**New: one-tap undo, no thinking required.** Because your homepage shows exactly
+one starred photo, starring a new frame un-stars the old one automatically (this
+fixes a real snag where starring an *older* frame appeared to do nothing). If
+that wasn't what you meant, a **↩ RE-PIN** button names the frame that just
+stepped down — one tap puts it back, crop and all. And any frame you've featured
+before shows up on a small "ready to re-feature" row, so bringing it back is
+always one click.
+
+Nothing to do — merge and it's there. No new Cloudflare resources, no config, no
+change to how publishing works: the cards still go live through your normal
+publish, exactly as before.
+
+## 2026-08-24
+
+**Fixed: on a phone, the Pulse card no longer shrinks away while you type.** With
+the on-screen keyboard up, the card was the only part of the screen that could
+give up room — so it gave up all of it, and the line you were writing got squeezed
+out of the card entirely. Now, while the keyboard is up, the things you are not
+using step aside (the lane row, the starter suggestions, the colour dots) and the
+card keeps the space. They all come back the moment you put the keyboard away.
+
+**Changed: the glyph picker is one menu, and it holds everything.** It used to
+show only the twelve glyphs belonging to whichever lane you had open, so picking
+"Photography" quietly took the rest away. Now every discipline is in the same
+menu under its own heading — scroll through the lot — with the lane you are in
+marked at the top. The glyphs are bigger, and the menu closes on a tap outside or
+the Escape key.
+
+**Changed: add and remove glyphs freely, without wiping your card.** Tap a glyph
+to add it; tap it again to take it off. Every glyph on your card also shows as a
+little chip at the top of the menu with an ✕ — tap that to remove just that one.
+The menu stays open while you experiment, so you can try a few combinations
+against your line without it disappearing every time, and your writing is never
+touched. (Before, the only way to drop a glyph was RESET CARD, which cleared
+everything.)
+
+**New: any emoji you want, from your own keyboard.** There is a small field at
+the top of the glyph menu. Tap it, use your phone or laptop's own emoji key, and
+whatever you pick goes on the card. Nothing extra is downloaded to your site —
+it's your device's emoji picker, so it always has everything and it always
+matches what your readers' devices can draw. The curated glyphs stay for when you
+just want something quick. On a phone, when your keyboard's emoji panel opens, the
+menu steps aside so you can still see your card while you pick.
+
+Nothing to do — merge and it's there.
+
+**Changed: the Field Notes editor is rebuilt.** Writing a note used to happen in
+a box beside a live preview, which only really fitted on a laptop — on a phone or
+a tablet the buttons wrapped onto two and three rows, the row jumped every time
+your work auto-saved, and the writing area fought the on-screen keyboard.
+
+It is one page now. Your note sits in the middle of the screen the way a page
+sits on a desk: cover picture, title, a single line for the date and place, and
+the writing. Nothing scrolls except the page.
+
+What moved:
+
+- **Preview is a button, not a second column.** `◫ PREVIEW` slides the rendered
+  note in over your writing; close it and it goes away. `↗ REAL PAGE` inside it
+  still opens the true published page in a new tab.
+- **One list of notes** instead of two dropdowns — drafts and published in the
+  same list, and it always shows which one you have open.
+- **The insert tools are together.** FRAMES, DAYS, PICTURE, VIDEO, MUSIC and
+  AUDIO live on one floating bar at the bottom. On a phone or a tablet in
+  portrait they collapse into a single `⊕ INSERT` button that opens the same
+  drawer, and PREVIEW / SAVE / ▲ STAGE move down to your thumbs.
+- **The save indicator has its own reserved space**, so watching it can no longer
+  shove the buttons around.
+- **`⌘P`** toggles the preview. Everything else you knew still works: ⌘B, ⌘I,
+  ⌘K, ⌘↵ to stage, Esc to leave focus mode.
+- **Fewer controls, on purpose.** The `TITLE ▾` collapse is gone (the fields it
+  hid are one short line now, so there was nothing left to reclaim), and the
+  hide-the-bottom-nav toggle moved into the new `⋯` menu along with focus mode
+  and delete.
+
+Nothing about your posts changed — same Markdown, same files, same publish. This
+is the editor around them.
+
+**Nothing to do.** Your browser may hold the old console for one load; a refresh
+picks up the new one.
+
+---
+
+## 2026-08-23 (evening)
+
+**Fixed: a brand-new site no longer shows an error page to Google.** Your site
+has a plain-text listing of your archive at `/archive/manifest.html` — it's what
+search engines and the Internet Archive read. On a site that hadn't published
+any archive entries yet, that page returned a server error instead of just being
+empty, and your sitemap was pointing search engines straight at it. Now it
+renders an empty page until you have work in it, which is the truth. If a read
+genuinely fails it still reports an error, so an outage can't get mistaken for
+"this archive is empty" and archived that way. No action required.
+
+**Fixed: your changes now appear as soon as the deploy finishes.** Publishing
+saves to GitHub, Cloudflare rebuilds, and your site goes live — but for up to
+five minutes *after* that rebuild finished, the site could still hand visitors
+the previous version of your data. It was a cache that had no idea a new
+version had shipped. That's why a correct publish could look like it hadn't
+worked, and why opening a private window didn't help: the stale copy was
+sitting at Cloudflare, not in your browser.
+
+The cache now knows which deploy it belongs to, so a new build simply doesn't
+see the old copy. Same speed for repeat visitors, no more waiting for a timer
+to run out.
+
+**⚙️ Worth doing after you merge this one.** The fix uses one small setting in
+`wrangler.jsonc` — the file you always keep your own version of. Open yours and
+add these three lines near the top, alongside `"observability"`:
+
+```jsonc
+"version_metadata": {
+  "binding": "CF_VERSION_METADATA"
+},
+```
+
+Nothing breaks if you skip it — your site behaves exactly as it does today. You
+just don't get the improvement. New forks get it automatically.
+
+**Also: the homepage picks up a new starred frame within a minute.** The bit of
+your site that decides which photo is pinned to the homepage was telling
+browsers to hold onto their copy for five minutes. Now it's one minute, and
+repeat visitors still get an instant page while the fresh copy loads behind it.
+
+**New: you can ask your site which version it's running.** Visit
+`your-site.com/api/version` (or `curl` it from a phone) and it tells you which
+deploy it's currently serving and when that went live. Handy for the one
+question that used to have no answer: "has my publish actually landed yet, or
+am I still looking at an old copy?"
+
+## 2026-08-23 (later the same day)
+
+**Fixed: settings you set before a photo's first publish no longer get lost.**
+If you dropped a photo in, set its focal point or starred it, and published —
+those settings often didn't make it. You'd go back, set them again, publish a
+second time, and it would stick. Not you: a real bug, and this closes it.
+
+What was happening, in plain terms: publishing saves your work to GitHub, and
+the console used to immediately fetch it back a couple of seconds later to stay
+in step. But GitHub's "read" side runs a few seconds behind its "write" side, so
+that fetch could return the *older* version of your data — and the console
+trusted it over what was on your screen, quietly undoing the settings you'd just
+made. The counter still said you had changes, so publishing again worked.
+
+Three things changed. The console no longer re-fetches after publishing (it
+already knows what it just saved). When it does sync, it now asks GitHub for one
+exact version rather than "whatever main is right now", so it can't get a mix of
+new and old. And it now keeps track of *which specific items* you've edited, so
+a sync — or closing the tab — can't overwrite an edit you haven't published yet.
+**No action required.** If you had frames that lost their settings, they were
+never published with them; set them once more and this time they'll hold.
+
+**New: the publish page tells you what you're about to publish.** The summary
+cards along the top showed a count — "+3 ▲" — and that was all you got. Now tap
+any card with changes and it opens a list of exactly what changed: *f#241 — card
+crop*, *RAW card: f#242 ← f#241*, a post's title with *— hero layout*. Repeated
+tweaks to the same item collapse into one line with a ×3 rather than three
+lines.
+
+**Changed: the Publish button is now a light, not a counter.** The button in the
+top-right no longer carries a number — it's simply lit when you have unpublished
+work and unlit when you don't. The number hasn't gone anywhere: it's in the
+status text beside it ("17 PENDING"), on the Publish tab badge on iPad, and
+itemised on the publish page itself. As the console grows more kinds of changes,
+a single big number was becoming something you couldn't act on. No action
+required.
+
+## 2026-08-23
+
+**New: a field note can lead its homepage card with its picture.** Field notes
+have always rendered on the homepage as a typographic tile — kicker, title, a
+short tease. Now each note can instead lead with its own hero image: the
+picture fills the card the way an archive frame does, the title sits under it,
+and a small **Field Note** chip in the corner says what it is. No headline
+stamped across the photograph.
+
+It's per post and off by default, so every note you already have looks exactly
+as it did. To switch one on, open it in Field Notes and press **▢ HERO CARD**
+next to ◎ FOCAL on the hero slot — the button only appears once the note has a
+hero image. It applies on stage/update like the focal point does, and publishes
+with the post.
+
+Two things worth knowing: the card crops tall (4:5), so a hero framed for the
+wide post banner may want its own crop — ◎ FOCAL steers both. And if the
+picture ever goes missing, the card quietly goes back to being a text tile
+rather than showing a broken image. No action required.
+
+**Changed: starring a buffer frame for the homepage now un-stars the previous
+one.** The homepage shows exactly one RAW card, but the star used to just add a
+flag — star a second frame and both stayed starred, with the newest capture
+date winning silently. Starring an older frame looked like it did nothing.
+Now the star is exclusive: starring a frame steps the previous one down in the
+same click, and the toast names the frame that yielded. The displaced frame
+keeps its 4:5 card crop, so re-starring it later is one click. Data published
+by an older console (several starred frames) still renders fine — newest wins,
+and the flags heal the next time you star anything. No action required.
+
+**Internal: the homepage grid renders through a card engine now.** The four
+card builders (photo, text, audio, pulse) sit behind a small registry with a
+per-kind layout seam — groundwork for optional card layouts (a field note
+leading with its hero image is first up). With no layout chosen, the grid's
+markup is byte-for-byte identical to before — a test compares the new renderer
+against captured output from the old one — so nothing about your homepage
+changes until you choose something. No action required.
+
 ## 2026-08-19
 
 **Fixed: the archive's Camera, Lens and Medium fields were somebody else's

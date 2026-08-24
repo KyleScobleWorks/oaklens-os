@@ -8,6 +8,7 @@
 //   GET /feed.xml              — Atom syndication of published field notes
 //   GET /api/buffer-summary    — ~120-byte precomputed buffer counts
 //   GET /.well-known/analogs.txt — webring ownership claim (config-gated)
+//   GET /api/version           — which deploy is this origin serving
 
 import siteConfig from '../shared/config.js';
 import { cdnBase } from '../shared/site.js';
@@ -15,8 +16,44 @@ import { PAGE_ROUTES, pageDisabled, publicPages } from '../shared/pages.js';
 import { configuredNode, analogsToken } from '../shared/webring.js';
 import { escapeHtml, baseName, localDay } from '../shared/text.js';
 import { CORS_HEADERS, jsonRes } from '../shared/http.js';
-import { loadDataJson } from '../edge/data.js';
+import { loadDataJson, _deployToken } from '../edge/data.js';
 import { _frameImg, OG_IMG_WIDTH } from '../edge/chrome.js';
+
+// ---- GET /api/version ----
+//
+// Which deploy is this origin serving? Before this there was no way to answer
+// that from outside the Cloudflare dashboard — which is how a correct publish
+// spent five minutes looking broken (2026-08-23): the build had landed, but
+// nothing on the site could say so. `version` is the SAME token loadDataJson
+// keys its edge cache on, so "the version changed" and "the data cache turned
+// over" are one fact instead of two you have to correlate by hand.
+//
+// PUBLIC and identity-free on purpose. The id is an opaque UUID Cloudflare
+// assigns per version and the timestamp is when it went live; neither names
+// the instance, its owner, its resources or its repo. `tag` is deliberately
+// NOT returned — it is operator-set free text and a fork could have typed
+// anything into it.
+//
+// no-store, not the usual max-age: a cached answer to "is it live yet" is a
+// wrong answer, and being current is this endpoint's entire job. (Same
+// reasoning as handleAnalogsToken's 404 above.)
+//
+// An instance whose wrangler.jsonc has no version_metadata binding answers
+// { version: null } — an honest "unknown", never a 404 and never a guess.
+export function handleVersion(env) {
+  const meta = (env && env.CF_VERSION_METADATA) || null;
+  const res = jsonRes({
+    ok: true,
+    version: (meta && typeof meta.id === 'string') ? meta.id : null,
+    deployed: (meta && typeof meta.timestamp === 'string') ? meta.timestamp : null,
+    // What the edge data cache is scoped by — equals `version` when the
+    // binding is present, 'v0' when it is not. Surfaced so a stale-content
+    // report can be diagnosed without reading the source.
+    cacheScope: _deployToken(env),
+  }, 200);
+  res.headers.set('Cache-Control', 'no-store');
+  return res;
+}
 
 // ---- GET /api/site/settings ----
 //
@@ -92,14 +129,31 @@ export async function handleManifest(request, env) {
   const url = new URL(request.url);
   let data;
   try {
-    const res = await env.ASSETS.fetch(new Request(`${url.origin}/data/archive.json`));
-    if (!res.ok) throw new Error('Fetch not ok');
-    data = await res.json();
+    // Through loadDataJson, like every other data reader: it shares the
+    // deploy-scoped edge cache (§2.4) instead of re-reading the asset bundle on
+    // every crawler hit, AND it carries the status through, which is what makes
+    // the split below possible.
+    data = await loadDataJson(url.origin, env, 'data/archive.json');
   } catch (err) {
-    return new Response('Internal Server Error', {
-      status: 500,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+    // Same split as the Atom and podcast feeds: a MISSING archive.json is not
+    // an outage, it is how an un-seeded fork ships — os-extract omits it
+    // (DATA_OMITTED) so the bundled samples render. An empty manifest is that
+    // instance's truth. This used to answer 500 for it, and /sitemap.xml
+    // advertises this page, so every brand-new fork was handing crawlers a
+    // server error until its owner published a first archive entry. Invisible
+    // on a seeded instance, which is why it survived (2026-08-23).
+    //
+    // Anything else IS a transient read failure and keeps the 500 — an empty
+    // manifest served under a real outage would tell the Wayback Machine this
+    // archive is empty, and that snapshot is the thing we cannot take back.
+    if (err.status !== 404) {
+      console.error('[manifest]', err.message);
+      return new Response('Internal Server Error', {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
+    data = [];
   }
 
   if (!Array.isArray(data)) {
@@ -458,12 +512,29 @@ export function _featuredRawFrames(arr, limit = 4) {
 // to render one strip thumbnail + frame/day counts. This returns a ~120-byte
 // precomputed summary instead (plus any featured RAW frames for the homepage —
 // see _featuredRawFrames). buffer.json is read through the edge cache
-// (loadDataJson), so the heavy parse happens at most once per cache TTL.
+// (loadDataJson), whose key is scoped by the deploy, so a publish is reflected
+// here as soon as its build lands.
+//
+// SIXTY seconds, not 300. This header is the OTHER staleness layer, and it is
+// the one that outlives a deploy in the author's own browser: the edge fix
+// above makes the origin answer correctly the moment a build lands, but a
+// `max-age=300` response already sitting in a tab keeps the old answer
+// regardless. That is why the 2026-08-23 report only reproduced in normal
+// windows — a fresh private window has nothing cached, so it was reading past
+// this layer to the stale edge behind it. Fixing one without the other would
+// have left the author waiting while a stranger saw the change immediately.
+//
+// stale-while-revalidate keeps the cost honest: a repeat visitor still renders
+// instantly from cache while the refresh happens behind them, so origin hits
+// are bounded by revalidation rather than hard misses — the same trade
+// `_headers` already makes for /data/*.json. Staleness caps at 60s.
+const BUFFER_SUMMARY_CACHE = 'public, max-age=60, stale-while-revalidate=300';
+
 export async function handleBufferSummary(request, env) {
   const url = new URL(request.url);
   const empty = (extra = {}) =>
     new Response(JSON.stringify({ frames: 0, ...extra }), {
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300', ...CORS_HEADERS },
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': BUFFER_SUMMARY_CACHE, ...CORS_HEADERS },
     });
   try {
     const data = await loadDataJson(url.origin, env, 'data/buffer.json');
@@ -483,7 +554,7 @@ export async function handleBufferSummary(request, env) {
       latest: { filename: latest.filename, focus: latest.focus || '' },
       featured: _featuredRawFrames(arr),
     }), {
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300', ...CORS_HEADERS },
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': BUFFER_SUMMARY_CACHE, ...CORS_HEADERS },
     });
   } catch (err) {
     console.error('[buffer-summary]', err.message);

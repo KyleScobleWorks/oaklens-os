@@ -253,7 +253,11 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body { background: var(--bg); height: 100%; }
+html, body { background: var(--bg); height: 100dvh; }
+/* Fallback for browsers without dvh support */
+@supports not (height: 100dvh) {
+  html, body { height: 100%; }
+}
 body {
   font-family: var(--font-mono);
   color: var(--text);
@@ -306,18 +310,31 @@ button { font-family: inherit; cursor: pointer; }
   transition: all 200ms ease;
 }
 .publish-btn:hover { background: var(--accent); color: var(--on-accent); }
-.publish-btn .badge {
+/* The pending pip. A FLAT SQUARE, no bezel, no glow, no animation — the SYS
+   lamp owns the round bezelled LED housing, and a second indicator wearing the
+   same clothes would read as another system state rather than "you have work
+   to publish". Deboss don't glow. */
+.publish-btn .pip {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 0;
   background: var(--accent);
-  color: var(--on-accent);
-  padding: 1px 7px;
-  border-radius: 8px;
-  font-weight: 700;
-  font-size: var(--t-micro);
 }
-.publish-btn:hover .badge { background: var(--on-accent); color: var(--accent); }
-.publish-btn.empty { opacity: 0.4; border-color: var(--border-strong); color: var(--text-dim); }
+.publish-btn:hover .pip { background: var(--on-accent); }
+.publish-btn.empty {
+  opacity: 0.4;
+  border-color: var(--border-strong);
+  color: var(--text-dim);
+}
 .publish-btn.empty:hover { background: transparent; color: var(--text-dim); }
-.publish-btn.empty .badge { background: var(--border-strong); color: var(--text-dim); }
+/* Unlit: the housing stays, the light goes out — the control keeps its shape
+   so it never looks like it moved or vanished. */
+.publish-btn.empty .pip,
+.publish-btn.empty:hover .pip {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
 
 /* ============ LAYOUT ============ */
 .layout {
@@ -819,102 +836,809 @@ button { font-family: inherit; cursor: pointer; }
 .archive-card .info .tag .pipe { color: var(--accent); }
 .archive-card .info .hash { color: var(--text-ghost); font-size: var(--t-micro); letter-spacing: 0.09em; margin-top: 2px; }
 
-/* ============ FN// MARKDOWN COMPOSER ============ */
-.fn-compose {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  align-items: start;
-  height: calc(100vh - var(--topbar-h) - 180px);
-  height: calc(100dvh - var(--topbar-h) - 180px);
-  min-height: 500px;
+/* =============================================================
+   FIELD NOTES STUDIO
+   -------------------------------------------------------------
+   Rewritten 2026-08-23. The whole surface lives in THIS section —
+   that is the point of it. What it replaced was ~460 lines of FN
+   rules spread over ten regions of this file and reached by five
+   separate media queries, three of which redefined the same
+   two-column grid. Every fix had to be made in four bands, and one
+   was always missed. Read
+   docs/maintenance/2026-08-23-field-notes-studio.md before moving
+   any of it.
+
+   THE SHAPE — three parts, and no fourth:
+
+     .fn-bar      fixed header. Three zones, none of which can push
+                  another around.
+     .fn-canvas   THE ONLY SCROLLER. The manuscript sits inside it
+                  and the textarea grows with its own content, so
+                  there is never a scroller inside a scroller — which
+                  is what makes an iPad decide for itself which box
+                  a swipe belongs to, and what makes a caret vanish
+                  under the on-screen keyboard.
+     .fn-dock     the insert tools, floating.
+
+   Everything else — the preview, the drawer, the ⋯ menu — is an
+   overlay that is closed by default. Holding a live preview beside
+   the writing is what made the old editor width-hungry; being
+   width-hungry is what wrapped the toolbar; and the wrapped toolbar
+   is why every autosave moved the buttons.
+
+   THREE INVARIANTS. tests/fn-studio.test.js fails if any is broken:
+
+     1. NO BUTTON ROW WRAPS. Not one. `flex-wrap: nowrap` on every
+        row that holds buttons. When a row runs out of width the
+        ZONE relocates (see THE COMPACT BAND) — it never stacks.
+     2. THE LIVE READOUT CANNOT MOVE ANYTHING. Save/sync status and
+        word count sit in fixed `ch` slots, so writing a longer
+        string into one changes no geometry at all. The old build
+        had them sharing a wrapping row with the buttons.
+     3. ONE SCROLLER.
+
+   Two layouts only: this one, and THE COMPACT BAND at the bottom.
+   ============================================================= */
+
+/* ---- the shell ----
+   .view--bounded gives us `display:flex; flex-direction:column;
+   height:100%; overflow:hidden` (see § the bounded shell) — the id
+   selector out-specifies its padding without a fight. Subtracting
+   --kb-inset is what keeps the dock above the keys: iPadOS never
+   resizes the layout viewport for the on-screen keyboard, so a
+   surface that wants to sit on top of it has to shorten itself. */
+#view-fn.view--bounded.active {
+  padding: 0;
+  height: calc(100% - var(--kb-inset));
+  position: relative;      /* containing block for the dock + overlays */
 }
-.fn-compose .editor,
-.fn-compose .preview-pane {
+
+/* Two numbers, and everything at the foot of the studio reads them.
+
+   --fn-foot   what is ALREADY occupying the bottom edge before the studio puts
+               anything there: the tab bar, plus the home indicator. Zero on a
+               desktop window, because there is no tab bar there.
+   --fn-dock-clear
+               how much the canvas must leave below the last line so the dock
+               never covers it.
+
+   ⚠️ --fn-foot is why this is a variable and not a number in three places. The
+   tab bar turns on at `(max-width: 1180px), (pointer: coarse)` — an iPad Mini
+   in landscape is 1133px AND coarse. The studio's own compact band starts far
+   later (860px / portrait), so on that iPad the dock was floating at a plain
+   18px and sitting UNDER the glass bar, unreachable. Same 900/1180 desync the
+   Pulse dock hit, and it is a class of bug, not an incident: any hardcoded
+   bottom offset in this section is the bug coming back. */
+#view-fn {
+  --fn-foot: 0px;
+  --fn-dock-clear: calc(84px + var(--fn-foot));
+}
+@media (max-width: 1180px), (pointer: coarse) {
+  #view-fn { --fn-foot: calc(var(--tabbar-rsv) + var(--safe-bottom)); }
+}
+/* Focus mode hides the bar outright, so the floor comes back. (--tabbar-rsv is
+   already 0 under body.kb-open and body.fn-bar-hidden; this is the third way
+   the bar can be absent.) */
+body.fn-focus #view-fn { --fn-foot: var(--safe-bottom); }
+
+.fn-studio {
+  position: relative;      /* the elastic draft band hangs off this */
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  /* min-height:0 lets the flex children (textarea / preview-area) shrink below
-     their content so they scroll internally; overflow:hidden keeps an open
-     DATES/FRAMES panel or a tall render from spilling out and breaking the grid. */
-  min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  background: var(--bg-elev-1);
 }
-.fn-pane-hdr {
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--t-micro);
-  color: var(--text-dim);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  background: var(--bg-elev-2);
+
+/* Elastic band (craft pass): the studio says "this one is not published yet"
+   from across the room. It used to be a full-height rule down the left edge of
+   the editor card — which, once the card became the whole pane, sat flush
+   against the sidebar and read as a divider rather than as state. Same signal,
+   moved to the one edge that is unambiguously the studio's own: the underline
+   of its bar. Class toggled in fnLoadPost/fnNewPost/fnStage; the DRAFT stamp
+   beside the note's id is the same fact up close. */
+.fn-studio.is-draft .fn-bar {
+  border-bottom-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* ---- 1. THE BAR ----
+   Left zone shrinks (the select truncates itself), middle zone is rigid
+   and reserved, right zone never shrinks. `nowrap` is invariant 1. */
+.fn-bar {
+  flex: 0 0 auto;
   display: flex;
-  justify-content: space-between;
+  flex-wrap: nowrap;
   align-items: center;
-  /* `space-between` needs two children to mean anything. The preview pane has
-     only its action group now (the caption is on the region, not on screen), so
-     that variant pushes the group to the trailing edge where the eye already
-     expects it — same alignment as when the caption was there holding it. */
+  gap: 16px;
+  min-height: 54px;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--surface-1);
 }
-.fn-pane-hdr--actions { justify-content: flex-end; }
-.fn-frontmatter {
-  padding: 12px 14px;
-  background: var(--bg-elev-2);
-  border-bottom: 1px solid var(--border);
-  display: grid;
-  grid-template-columns: 100px 1fr 1fr 1fr;
+
+.fn-bar-doc {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 8px;
-  font-size: 0.7rem;
+  flex: 1 1 auto;
+  min-width: 0;            /* the one zone allowed to give up width */
 }
-.fn-frontmatter .field { margin: 0; }
-.fn-frontmatter .field-label { font-size: var(--t-micro); margin-bottom: 3px; }
-.fn-frontmatter .field-input { padding: 6px 8px; font-size: 0.72rem; }
-.fn-hero-slot {
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-input);
+.fn-doc-select {
+  flex: 0 1 340px;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-1);
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: var(--t-label);
+  padding: 7px 10px;
+  cursor: pointer;
+  outline: none;
+}
+.fn-doc-select:focus-visible { border-color: var(--accent); }
+
+/* Reserved-width telemetry — invariant 2. The widths are in `ch` on a mono
+   face, so each span has already paid for the longest string it can hold
+   ("☁ SYNCED", "99999 words", "· 12 min"). Nothing here can reflow a button. */
+.fn-bar-telemetry {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--t-micro);
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fn-sync, .fn-count, .fn-read {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Sized off the longest string each can hold, with headroom: `ch` is the
+   advance of "0", and in a display mono the letters and the interpunct run
+   wider than that — 8ch of `ch` clipped "· 1 min" to "· 1 m…" on the first
+   pass. The states are words, not glyphs, for the same reason: a ☁ resolved
+   from a fallback face has no predictable width at all. */
+.fn-sync  { width: 13ch; }
+.fn-count { width: 13ch; text-align: right; }
+.fn-read  { width: 10ch; }
+.fn-sync[data-state="saving"] { color: var(--accent-text); }
+.fn-sync[data-state="saved"]  { color: var(--ok); }
+.fn-sync[data-state="error"]  { color: var(--warn); }
+
+.fn-bar-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- buttons: one family, three weights ---- */
+.fn-btn,
+.fn-tool,
+.fn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  white-space: nowrap;     /* a label never breaks mid-word */
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: var(--r-1);
+  transition: color var(--dur-1) var(--ease-out),
+              border-color var(--dur-1) var(--ease-out),
+              background var(--dur-1) var(--ease-out);
+}
+.fn-btn {
+  background: var(--surface-3);
+  border: 1px solid var(--line-3);
+  color: var(--ink-2);
+  font-size: var(--t-micro);
+  padding: 7px 11px;
+}
+.fn-btn:hover { color: var(--ink-1); border-color: var(--ink-3); }
+.fn-btn--new     { background: var(--accent-wash); border-color: var(--accent-line); color: var(--accent-text); }
+.fn-btn--new:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.fn-btn--stage   { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.fn-btn--stage:hover { filter: brightness(1.12); color: var(--on-accent); }
+.fn-btn--icon    { padding: 7px 9px; letter-spacing: 0; font-size: 0.85rem; line-height: 1; }
+.fn-btn--icon[aria-expanded="true"] { color: var(--accent-text); border-color: var(--accent); }
+.fn-btn--insert  { display: none; }         /* compact band only */
+#fn-preview-btn[aria-expanded="true"] { color: var(--accent-text); border-color: var(--accent); }
+
+/* ---- 2. THE STAGE + THE CANVAS ----
+   The stage is the writing and everything that floats over it. It exists so
+   the preview panel and the dock are positioned against the WRITING rather
+   than the whole view: the preview then slides across the manuscript and
+   leaves SAVE / ▲ STAGE reachable in the bar above, instead of burying the
+   controls you open a preview in order to use. */
+.fn-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.fn-canvas {
+  flex: 1 1 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 30px 24px var(--fn-dock-clear);
+  scroll-padding-bottom: var(--fn-dock-clear);
+}
+.fn-manuscript {
+  width: 100%;
+  max-width: 760px;        /* a measure, not a window — ~80ch of mono */
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ---- the cover ----
+   Empty it is a shallow dashed band; filled it is the picture, with its
+   controls on glass along the bottom edge. Same element either way — the
+   dropzone wiring (init.js wireDropzone) only knows the one id. */
+.fn-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 92px;
+  border: 1px dashed var(--line-3);
+  border-radius: var(--r-1);
+  background: var(--surface-1);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-out),
+              background var(--dur-1) var(--ease-out);
+}
+.fn-hero:hover, .fn-hero.over { border-color: var(--accent); background: var(--surface-2); }
+/* With a cover set the slot is still the dropzone — clicking it replaces the
+   picture — so it keeps the pointer. Only its edge changes: dashed invitation
+   becomes a solid frame. */
+.fn-hero.has-cover { border-style: solid; border-color: var(--line-2); }
+.fn-hero-img {
+  width: 100%;
+  max-height: 340px;
+  aspect-ratio: 16 / 7;
+  object-fit: cover;
+  object-position: 50% 50%;
+  background: var(--media-well);
+  display: block;
+}
+.fn-hero-empty {
+  display: flex;
+  flex-wrap: wrap;         /* copy + two chips: the one row allowed to wrap */
+  align-items: center;
+  justify-content: center;
+  gap: 8px 14px;
+  padding: 22px 16px;
+  font-size: var(--t-micro);
+  letter-spacing: 0.16em;
+  color: var(--ink-3);
+}
+.fn-hero-empty .accent { color: var(--accent); }
+.fn-hero-empty-alt { display: flex; gap: 6px; flex-wrap: nowrap; }
+
+/* On-media controls are theme-INDEPENDENT: they sit on a photograph, so
+   they stay dark glass + light ink in DAYLIGHT too. */
+.fn-hero-controls {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, transparent, var(--media-overlay) 62%);
+}
+.fn-hero:not(.has-cover) .fn-hero-controls { background: none; padding: 0; }
+.fn-hero-name {
+  font-size: var(--t-micro);
+  letter-spacing: 0.09em;
+  color: var(--media-ink-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fn-hero-tools { display: flex; flex-wrap: nowrap; gap: 5px; margin-left: auto; }
+
+.fn-chip {
+  background: var(--surface-3);
+  border: 1px solid var(--line-3);
+  color: var(--ink-2);
+  font-size: var(--t-micro);
+  padding: 5px 9px;
+}
+.fn-chip:hover { color: var(--ink-1); border-color: var(--ink-3); }
+.fn-chip--onmedia {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: var(--media-ink);
+}
+.fn-chip--onmedia:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+/* The homepage-card opt-in wears the console's one "switched on" state — the
+   same accent stroke every other toggle in here uses. */
+#fn-hero-card.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+/* ---- title + meta ---- */
+.fn-title {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  outline: none;
+  padding: 2px 0 6px;
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 3.4vw, 2.1rem);
+  line-height: 1.18;
+  letter-spacing: -0.01em;
+  color: var(--ink-1);
+  caret-color: var(--accent);
+}
+.fn-title::placeholder { color: var(--ink-x); }
+.fn-title:focus { border-bottom-color: var(--line-2); }
+
+.fn-meta {
+  display: flex;
+  flex-wrap: wrap;         /* labelled fields, not buttons — wrapping is fine */
+  align-items: center;
+  gap: 6px 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-2);
+}
+.fn-meta-field { display: flex; align-items: baseline; gap: 7px; cursor: text; }
+.fn-meta-label {
+  font-size: var(--t-micro);
+  letter-spacing: 0.16em;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.fn-meta-label .accent { color: var(--accent); }
+.fn-meta-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  outline: none;
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.12em;
+  color: var(--ink-1);
+  min-width: 0;
+}
+.fn-meta-input:hover  { border-bottom-color: var(--line-2); }
+.fn-meta-input:focus  { border-bottom-color: var(--accent); }
+.fn-meta-input::placeholder { color: var(--ink-x); }
+/* No width here on purpose: each input carries a `size` attribute, which the
+   browser resolves against the FONT's average advance rather than against the
+   width of a zero. `ch` clipped "2026-08-23" to "2026-08-2". */
+.fn-meta-state {
+  margin-left: auto;
+  font-size: var(--t-micro);
+  letter-spacing: 0.18em;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-1);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.fn-meta-state[data-state="live"] { color: var(--ok); border-color: var(--ok); }
+
+/* ---- the writing ----
+   No height, no overflow: it grows to its content (fn-editor.js _fnAutoGrow)
+   and the CANVAS scrolls. min-height keeps a one-line note from looking like
+   a form field. Nothing here may gain `overflow` — that's invariant 3. */
+.fn-body {
+  width: 100%;
+  min-height: 46vh;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  padding: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  line-height: 1.78;
+  letter-spacing: 0.01em;
+  color: var(--ink-1);
+  caret-color: var(--accent);
+  caret-shape: block;
+}
+.fn-body::placeholder { color: var(--ink-x); line-height: 1.78; }
+
+/* ---- 3. THE DOCK ----
+   Six sources, one row, labels and all. Absolute (not fixed) inside the
+   studio: `.view.active` runs a transform animation on entry, and a fixed
+   child of a transformed ancestor is positioned against THAT, not the
+   viewport — a 180ms jump on every visit to this view. */
+.fn-dock {
+  position: absolute;
+  left: 50%;
+  bottom: calc(18px + var(--fn-foot));
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+  max-width: calc(100% - 32px);
+  padding: 5px 8px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-2);
+}
+.fn-tool {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-3);
+  font-size: var(--t-micro);
+  padding: 7px 10px;
+}
+.fn-tool:hover { background: var(--surface-3); color: var(--ink-1); }
+.fn-tool.active { background: var(--accent-wash); color: var(--accent-text); border-color: var(--accent-line); }
+.fn-dock-rule { width: 1px; align-self: stretch; margin: 3px 4px; background: var(--line-3); flex: none; }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fn-dock { background: var(--surface-1); }
+}
+
+/* ---- OVERLAY: the ⋯ menu ---- */
+.fn-menu {
+  position: absolute;
+  top: 58px;
+  right: 18px;
+  z-index: 60;
+  min-width: 244px;
+  padding: 5px;
+  background: var(--surface-1);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-3);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.fn-menu[hidden] { display: none; }
+.fn-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-1);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--t-label);
+  text-align: left;
+  cursor: pointer;
+}
+.fn-menu-item:hover { background: var(--surface-3); color: var(--ink-1); }
+.fn-menu-item kbd {
+  margin-left: auto;
+  font-family: inherit;
+  font-size: var(--t-micro);
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+}
+.fn-menu-mark { color: var(--accent); width: 1.1em; text-align: center; }
+.fn-menu-item[aria-pressed="true"] { color: var(--accent-text); }
+.fn-menu-item--danger { color: var(--accent-text); }
+.fn-menu-item--danger .fn-menu-mark { color: var(--accent); }
+.fn-menu-rule { height: 1px; background: var(--line-2); margin: 4px 2px; }
+/* Reclaiming the bottom nav only means anything where there IS one. */
+.fn-menu-item--band { display: none; }
+
+/* ---- OVERLAY: the preview ----
+   Renders only while open (fn-editor.js fnRender early-returns when it is
+   closed), so a closed panel costs nothing per keystroke — which the old
+   always-live split pane could never say. */
+.fn-preview {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  z-index: 50;
+  width: min(560px, 62%);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+  border-left: 1px solid var(--line-3);
+  box-shadow: -14px 0 40px rgba(0, 0, 0, 0.5);
+  transform: translateX(100%);
+  transition: transform var(--dur-3) var(--ease-spring);
+}
+.fn-preview[hidden] { display: none; }
+.fn-preview.open { transform: translateX(0); }
+.fn-preview-hdr {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--surface-1);
+}
+.fn-preview-ttl {
+  font-size: var(--t-micro);
+  letter-spacing: 0.18em;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fn-preview-ttl .accent { color: var(--accent); }
+.fn-preview-hdr-tools { display: flex; flex-wrap: nowrap; gap: 6px; flex: none; }
+/* The rendered note proxies the PUBLIC page, which is dark whatever mode the
+   console is in — pin the dark palette locally so DAYLIGHT can't wash it out.
+   Pinning the MODE is right; pinning the BRAND was not, so --accent re-derives
+   from --brand-bright and a fork previews in its own colour. */
+.fn-preview-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 26px 26px 40px;
+  background: #000;
+  --text: #c9c9c9; --text-bright: #f2f2f2; --text-dim: #8f8f8f;
+  --text-faint: #8f8f8f; --accent: var(--brand-bright); --border: #242424;
+  --border-strong: #2a2a2a; --bg-elev-2: #141414; --media-well: #000;
+}
+
+/* ---- OVERLAY: the insert drawer ----
+   Rides the shared .sheet-overlay/.sheet pair, so only its width and its
+   innards are ours. */
+.sheet.fn-drawer {
+  width: min(760px, 100vw);
+  display: flex;
+  flex-direction: column;
+  max-height: min(72vh, 620px);
+  padding: 6px 0 calc(10px + var(--safe-bottom));
+}
+.fn-drawer-hdr {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 14px 10px;
+  border-bottom: 1px solid var(--line-2);
+}
+.fn-drawer-tabs { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; }
+.fn-drawer-tab {
+  flex: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fn-drawer-tab:hover { color: var(--ink-1); background: var(--surface-3); }
+.fn-drawer-tab[aria-selected="true"] {
+  color: var(--accent-text);
+  background: var(--accent-wash);
+  border-color: var(--accent-line);
+}
+.fn-drawer-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+}
+.fn-drawer-pane[hidden] { display: none; }
+.fn-drawer-pane--media { padding: 8px; gap: 4px; }
+.fn-media-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 14px;
-  min-height: 64px;
+  width: 100%;
+  padding: 12px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-1);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  text-align: left;
   cursor: pointer;
-  transition: background 150ms ease;
 }
-.fn-hero-slot:hover, .fn-hero-slot.over { background: var(--bg-elev-2); }
-.fn-hero-slot.over { outline: 1px dashed var(--accent); outline-offset: -1px; }
-.fn-hero-empty {
-  font-size: var(--t-micro);
-  color: var(--text-faint);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+.fn-media-row:hover { border-color: var(--accent-line); background: var(--surface-3); }
+.fn-media-mark { color: var(--accent); font-size: 1rem; width: 1.4em; text-align: center; flex: none; }
+.fn-media-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fn-media-txt b { color: var(--ink-1); font-size: var(--t-label); font-weight: 600; letter-spacing: 0.04em; }
+.fn-media-txt small { color: var(--ink-3); font-size: var(--t-micro); letter-spacing: 0.04em; }
+
+/* The two buffer pickers keep their own item styles (§ BUFFER DATES PANEL,
+   § FRAME BROWSER); only their containers moved into the drawer. */
+#fn-buffer-dates-panel .bd-list { padding: 6px 0 10px; }
+#fn-frame-browser .fb-toolbar,
+#fn-buffer-dates-panel .fb-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex-wrap: nowrap;
+  background: var(--surface-1);
 }
-.fn-hero-empty .accent { color: var(--accent); }
-.fn-hero-thumb {
-  width: 88px; height: 50px;
-  object-fit: cover;
-  background: var(--media-well);
-  flex-shrink: 0;
+/* The frame browser brings its own inner scroller. Inside the drawer the PANE
+   is the scroller, so that one stands down — invariant 3 applies here too. */
+#fn-frame-browser .fb-scroll { overflow: visible; flex: 0 0 auto; }
+
+/* ---- FOCUS MODE ----
+   Everything that is not the writing goes. The dock stays, dimmed, because
+   the tools are what you reach for mid-sentence; hovering brings it back. */
+body.fn-focus .topbar,
+body.fn-focus .sidebar,
+body.fn-focus .tabbar { display: none !important; }
+/* The bar FLATTENS rather than disappears. `display: none` on it took the
+   action group with it (a child cannot outlive its parent's display), which
+   left focus mode with no way to save, stage or exit except a keystroke. */
+body.fn-focus .fn-bar {
+  min-height: 0;
+  padding: 0;
+  background: none;
+  border-bottom: none;
 }
-.fn-hero-name {
-  font-size: var(--t-micro);
-  color: var(--text-dim);
-  letter-spacing: 0.09em;
-  flex: 1;
-  word-break: break-all;
+body.fn-focus .fn-bar-doc,
+body.fn-focus .fn-bar-telemetry { display: none; }
+/* …including the draft underline, which is higher-specificity than the flatten
+   above and would otherwise draw a red rule across an empty writing surface. */
+body.fn-focus .fn-studio.is-draft .fn-bar { box-shadow: none; border-bottom-color: transparent; }
+body.fn-focus .layout {
+  grid-template-columns: 1fr !important;
+  inset: 0 !important;
 }
-.fn-hero-clear {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-faint);
-  width: 22px; height: 22px;
-  font-size: 0.85rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+body.fn-focus .fn-canvas { padding-top: 40px; }
+/* Hiding the bar must not take SAVE / ▲ STAGE / ⋯ with it. They lift out as a
+   dimmed capsule — same behaviour as the dock, so focus mode never becomes a
+   surface you can only leave with a keystroke. (The compact band re-docks them
+   at the foot; see the override at the end of that query.) */
+body.fn-focus .fn-bar-actions {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 45;
+  padding: 5px 7px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-2);
+  opacity: 0.32;
+  transition: opacity var(--dur-2) var(--ease-out);
 }
-.fn-hero-clear:hover { color: var(--accent); border-color: var(--accent); }
+body.fn-focus .fn-bar-actions:hover,
+body.fn-focus .fn-bar-actions:focus-within { opacity: 1; }
+body.fn-focus .fn-dock { opacity: 0.32; }
+body.fn-focus .fn-dock:hover,
+body.fn-focus .fn-dock:focus-within { opacity: 1; }
+
+/* =============================================================
+   THE COMPACT BAND — phones, and any tablet held in portrait.
+   The ONE query the studio owns. It moves zones; it never restructures.
+     · the dock's six labelled tools → one ⊕ INSERT in the bar
+     · the bar's actions → out of the bar, docked at the foot
+   Same DOM in both, so there is no second copy of a button to drift.
+   ============================================================= */
+@media (max-width: 860px), ((max-width: 1180px) and (orientation: portrait)) {
+  /* The foot dock is taller than the floating capsule, so the canvas has to
+     leave more room. Everything below the writing still reads --fn-foot. */
+  #view-fn { --fn-dock-clear: calc(76px + var(--fn-foot)); }
+
+  .fn-bar {
+    gap: 10px;
+    min-height: 50px;
+    padding: 8px calc(14px + var(--safe-left)) 8px calc(14px + var(--safe-right));
+  }
+  .fn-doc-select { flex: 1 1 auto; }
+  .fn-read { display: none; }        /* the count carries the signal */
+  .fn-count { width: 10ch; }
+
+  /* The actions leave the bar and become the dock. Absolute inside the view
+     (which is already shortened by --kb-inset), so it rides on top of the
+     keyboard without a fixed-position containing-block trap. */
+  .fn-bar-actions {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: var(--fn-foot);
+    z-index: 40;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px calc(10px + var(--safe-left)) 9px calc(10px + var(--safe-right));
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    backdrop-filter: blur(18px) saturate(1.3);
+    border-top: 1px solid var(--line-2);
+  }
+  .fn-btn { padding: 10px 12px; min-height: var(--tap); }
+  .fn-btn--icon { padding: 10px; }
+  .fn-btn--insert { display: inline-flex; }
+  .fn-dock { display: none; }        /* ⊕ INSERT is its door here */
+
+  .fn-menu {
+    top: auto;
+    bottom: calc(var(--fn-foot) + 64px);
+    right: calc(10px + var(--safe-right));
+    left: calc(10px + var(--safe-left));
+    min-width: 0;
+  }
+  .fn-menu-item--band { display: flex; }
+  .fn-menu-item { min-height: var(--tap); }
+
+  .fn-canvas { padding: 20px calc(16px + var(--safe-left)) var(--fn-dock-clear) calc(16px + var(--safe-right)); }
+  .fn-title { font-size: clamp(1.35rem, 6.5vw, 1.7rem); }
+  .fn-body { min-height: 40vh; }
+  .fn-hero-img { aspect-ratio: 16 / 9; max-height: 42vh; }
+
+  /* Full-cover preview: there is no width to slide over on a phone. */
+  .fn-preview { width: 100%; border-left: none; }
+  .fn-preview-body { padding: 20px 18px 40px; }
+
+  .fn-drawer-tab { padding: 11px 14px; min-height: var(--tap); }
+  .fn-media-row { min-height: var(--tap); }
+
+  /* Focus mode: the actions stay a foot dock here (the wide-screen corner
+     capsule would put them under the notch on a phone). Same specificity as
+     that rule, later in the file — this is the one that lands. The bottom nav
+     can also be reclaimed for writing (§ FN tab-bar collapse): --tabbar-rsv
+     drops to 0 and every calc above follows it down. */
+  body.fn-focus .fn-bar-actions {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: var(--fn-foot);   /* the bar is gone in focus, so this is the notch */
+    border: none;
+    border-top: 1px solid var(--line-2);
+    border-radius: 0;
+    box-shadow: none;
+    opacity: 1;
+  }
+}
+
+/* Very short viewports (a phone in landscape with the keys up) — the studio
+   stops pretending it has rows to spend. */
+@media (max-height: 460px) {
+  /* The generic short-viewport rule (§ PULSE STUDIO) flips a bounded view to
+     `overflow-y: auto`. For the studio that would be a SECOND scroller — the
+     one thing this section is built to avoid — so re-assert it here. */
+  #view-fn.view--bounded.active {
+    height: calc(100% - var(--kb-inset));
+    overflow: hidden;
+  }
+  .fn-bar-telemetry { display: none; }
+  .fn-canvas { padding-top: 12px; }
+  .fn-body { min-height: 30vh; }
+  .fn-hero-img { max-height: 30vh; }
+}
 
 .fn-render .fn-hero-rendered {
   width: 100%;
@@ -941,44 +1665,6 @@ button { font-family: inherit; cursor: pointer; }
 .list-row.manual .l-sub::after { content: " · MANUAL"; color: var(--accent-dim); letter-spacing: 0.13em; }
 .list-row.auto .l-sub::after { content: " · AUTO"; color: var(--text-ghost); letter-spacing: 0.13em; }
 .external-glyph { color: var(--accent); margin-left: 4px; font-size: 0.7em; }
-
-.fn-editor-area {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-}
-.fn-editor-area textarea {
-  flex: 1;
-  background: var(--bg-input);
-  border: none;
-  color: var(--text-bright);
-  padding: 16px 18px;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  line-height: 1.7;
-  resize: none;
-  outline: none;
-}
-#fn-body {
-  caret-color: var(--accent);
-  caret-shape: block;
-}
-.fn-preview-area {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 28px;
-  /* The rendered preview proxies the PUBLIC site, which is dark regardless of
-     console mode — pin the dark palette locally so DAYLIGHT can't wash it out.
-     Pinning the MODE is right; pinning the BRAND was not. --accent was the
-     literal noir red, so an aperture site previewed its // marks in someone
-     else's colour and a fork inherited that. --brand-bright is the same tier
-     (small brand text on dark) and re-derives per preset above, so this line
-     now follows whatever the site actually runs. */
-  background: #000;
-  --text: #c9c9c9; --text-bright: #f2f2f2; --text-dim: #8f8f8f;
-  --text-faint: #8f8f8f; --accent: var(--brand-bright); --border: #242424;
-  --border-strong: #2a2a2a; --bg-elev-2: #141414; --media-well: #000;
-}
 
 .fn-render { color: var(--text); font-size: 0.85rem; line-height: 1.65; }
 .fn-render .fn-meta {
@@ -1035,73 +1721,6 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 /* ============ FOCUS MODE ============ */
-body.fn-focus .topbar { display: none !important; }
-body.fn-focus .sidebar { display: none !important; }
-body.fn-focus .layout {
-  grid-template-columns: 1fr !important;
-  inset: 0 !important;
-}
-body.fn-focus .view-header,
-body.fn-focus .btn-row { display: none !important; }
-body.fn-focus .view { padding: 0 !important; }
-body.fn-focus .fn-compose {
-  height: 100vh !important;
-  max-width: 100% !important;
-  gap: 0 !important;
-}
-body.fn-focus .fn-pane-hdr { border-top: 2px solid var(--accent); }
-
-/* ============ COLLAPSIBLE FRONTMATTER ============ */
-.fn-frontmatter.collapsed { display: none !important; }
-.fn-hero-slot.collapsed { display: none !important; }
-.fn-collapse-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-faint);
-  padding: 2px 8px;
-  font-size: var(--t-micro);
-  letter-spacing: 0.13em;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-.fn-collapse-btn:hover { color: var(--text); border-color: var(--text-dim); }
-
-/* ============ SAVE INDICATOR ============ */
-.fn-save-status {
-  font-size: var(--t-micro);
-  color: var(--text-faint);
-  letter-spacing: 0.13em;
-  transition: opacity 300ms ease;
-}
-.fn-save-status.saving { color: var(--accent); }
-.fn-save-status.saved { color: var(--text-faint); }
-.fn-unsaved-dot {
-  display: inline-block;
-  width: 6px; height: 6px;
-  background: var(--accent);
-  border-radius: 50%;
-  margin-left: 6px;
-  opacity: 0;
-  transition: opacity 200ms ease;
-}
-.fn-unsaved-dot.dirty { opacity: 1; }
-
-/* ============ FOCUS MODE BUTTON ============ */
-.fn-focus-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-faint);
-  padding: 2px 8px;
-  font-size: var(--t-micro);
-  letter-spacing: 0.13em;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-.fn-focus-btn:hover { color: var(--text-bright); border-color: var(--text-dim); }
-body.fn-focus .fn-focus-btn { color: var(--accent); border-color: var(--accent); }
-
 /* Apple Music Custom Embed */
 .apple-music-embed { margin: 24px 0; }
 .apple-music-embed iframe { width: 100%; max-width: 660px; height: 175px; border: none; border-radius: 8px; }
@@ -1175,10 +1794,35 @@ body.fn-focus .fn-focus-btn { color: var(--accent); border-color: var(--accent);
   padding: 16px;
   position: relative;
 }
-.summary-card.has-changes { border-color: var(--accent-dim); }
+.summary-card.has-changes { border-color: var(--accent-dim); cursor: pointer; }
+.summary-card.changes-open { border-color: var(--accent); }
 .summary-card .label { font-size: var(--t-micro); color: var(--text-dim); letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 8px; }
 .summary-card .count { font-size: 1.6rem; color: var(--text-bright); letter-spacing: 0.09em; }
 .summary-card .delta { position: absolute; top: 14px; right: 14px; font-size: var(--t-micro); color: var(--accent); letter-spacing: 0.09em; }
+
+/* ---- The change panel: what a card's "+N ▲" actually is ---- */
+.publish-changes {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--accent-dim);
+  padding: 10px 14px;
+  margin: -12px 0 24px;   /* tucks under the summary grid's own bottom margin */
+}
+.publish-changes .pc-head {
+  font-size: var(--t-micro); color: var(--text-dim);
+  letter-spacing: 0.16em; text-transform: uppercase;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+}
+.publish-changes .pc-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 5px 0; border-bottom: 1px solid var(--border);
+  font-size: 0.7rem; letter-spacing: 0.06em;
+}
+.publish-changes .pc-row:last-child { border-bottom: none; }
+.publish-changes .pc-glyph { color: var(--accent); width: 1em; flex: none; }
+.publish-changes .pc-glyph.pc-remove { color: var(--text-dim); }
+.publish-changes .pc-label { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.publish-changes .pc-n { color: var(--text-dim); font-size: var(--t-micro); }
+.publish-changes .pc-other .pc-label { color: var(--text-dim); }
 .publish-action { background: var(--bg-elev-1); border: 1px solid var(--border); padding: 28px; text-align: center; }
 .publish-action h3 { color: var(--text-bright); font-size: 1.1rem; letter-spacing: 0.13em; margin-bottom: 8px; }
 .publish-action .hint { color: var(--text-faint); font-size: 0.7rem; letter-spacing: 0.13em; margin-bottom: 20px; line-height: 1.6; }
@@ -1423,7 +2067,7 @@ body.buffer-link-mode .buffer-frame.burst-selected::before { background: rgba(25
 @media (max-width: 920px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { display: none; }
-  .archive-compose, .fn-compose { grid-template-columns: 1fr; height: auto; }
+  .archive-compose { grid-template-columns: 1fr; height: auto; }
   .publish-summary { grid-template-columns: repeat(2, 1fr); }
 }
 
@@ -1525,6 +2169,7 @@ body.buffer-link-mode .buffer-frame.burst-selected::before { background: rgba(25
   /* The header and the counter rail read across the whole surface. */
   #view-publish.active > .view-header,
   #view-publish.active > .publish-summary { grid-column: 1 / -1; }
+  #view-publish.active > .publish-changes { grid-column: 1 / -1; }
   /* These carry `style="margin-top: 12px"` inline, from when they were stacked.
      The grid's own gap is the spacing now, and an inline margin needs
      !important to answer. */
@@ -1548,20 +2193,6 @@ body.buffer-link-mode .buffer-frame.burst-selected::before { background: rgba(25
   .danger-zone { padding: 12px 16px; }
   .section-rule { margin: 10px 0; }
 
-  /* ---- FIELD NOTES: the chip row fits instead of running off the edge ---- */
-  /* The row already scrolls sideways at this width (the band rule below), but a
-     row that is clipped mid-button reads as broken rather than as scrollable —
-     which is exactly how it was reported. Tightening the chips is the honest
-     fix: they fit, so there is nothing to discover. */
-  #view-fn .fn-hdr-tools .btn,
-  #view-fn .fn-hdr-tools .fn-panel-btn {
-    padding-left: 7px;
-    padding-right: 7px;
-    letter-spacing: 0.06em;
-  }
-  /* The pane title is the least load-bearing thing in the row — you know which
-     pane you are in — so it yields its width first. */
-  #view-fn .fn-pane-hdr > span:first-child { min-width: 0; flex: 0 1 auto; }
 }
 
 /* ---- TABLET + PHONE (<=1180px): no horizontal overflow ----
@@ -1577,7 +2208,6 @@ body.buffer-link-mode .buffer-frame.burst-selected::before { background: rgba(25
   .field-textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 
   /* Rigid metadata grids → wrap instead of clipping their inputs/selects. */
-  .fn-frontmatter { grid-template-columns: 1fr 1fr; }
   .field-row.cols-3 { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
 
   /* The wall/barrel/friends "add" rows (.entry-form-row, Phase 4) carry fixed
@@ -1592,56 +2222,6 @@ body.buffer-link-mode .buffer-frame.burst-selected::before { background: rgba(25
 
   /* Backstop only — the grid fixes above should prevent overflow on their own. */
   .main { overflow-x: hidden; }
-}
-
-/* ---- iPad-MINI LANDSCAPE: vertical writing split (FN editor only) ----
-   The width-band rule above collapses the FN compose to a single column, which
-   on the mini's ~1133px landscape stacks the editor on top of the preview and
-   buries the render below the fold. In landscape the mini is wide enough to run
-   them side-by-side, so restore a vertical split — editor-biased 60/40 (writing
-   is primary, the preview is for glancing). We also reclaim the view chrome so
-   the writing surface fills the mini's short (~744px) landscape height: the FN
-   view becomes a full-height flex column and the compose grid flexes into what's
-   left, each pane scrolling internally. Scoped to #view-fn so nothing else moves;
-   desktop (>1180px) keeps its own untouched two-column layout. */
-@media (min-width: 921px) and (max-width: 1180px) and (orientation: landscape) {
-  #view-fn.active {
-    display: flex;
-    flex-direction: column;
-    /* Tie to .main's real height (100%) — NOT 100vh. In Safari 100vh is the
-       URL-bar-hidden height, which is taller than the visible area, so a
-       100vh-based view overflowed .main and let it scroll, dragging the toolbar
-       off the top with no way back. .main is already bounded by the fixed
-       .layout, so 100% fills exactly what's visible and never overflows.
-       Minus the live keyboard inset: iPadOS never resizes the layout viewport
-       for the on-screen keyboard, so without it the editor bottom (and the
-       caret) sits behind the keys. */
-    height: calc(100% - var(--kb-inset));
-    padding: 14px 18px 12px;
-    overflow: hidden;
-  }
-  #view-fn .view-header { margin-bottom: 10px; padding-bottom: 10px; }
-  #view-fn .view-title  { font-size: 1.05rem; margin-bottom: 2px; }
-  #view-fn .view-sub    { font-size: var(--t-micro); }
-  #view-fn > .btn-row   { margin-bottom: 10px; }
-  #view-fn .fn-compose {
-    grid-template-columns: 3fr 2fr;   /* ~60 / 40, editor biased */
-    gap: 12px;
-    height: auto;
-    min-height: 0;
-    flex: 1 1 auto;
-  }
-
-  /* Keep the editor toolbar on one stable line on the narrow pane: tighten the gap
-     and drop the read-time stat (word count carries the signal) so starting to type
-     never reflows the row. */
-  #view-fn .fn-hdr-tools { gap: 6px; }
-  #view-fn #fn-read-time { display: none; }
-
-  /* Focus mode in landscape: full screen, same editor-biased split. In focus the
-     .layout is inset:0 so .main == viewport; 100% fills it without the 100vh
-     overshoot. (The base focus rules force the compose height/gap with !important.) */
-  body.fn-focus #view-fn.active { height: 100%; padding: 0; }
 }
 
 /* ============ SIDEBAR COLLAPSE (reclaim nav width without full focus) ============ */
@@ -2396,13 +2976,6 @@ body.sidebar-collapsed .sidebar { display: none; }
 .log-info { color: var(--text-dim); }
 
 /* ============ PHASE 4: BUFFER DATES PANEL ============ */
-.fn-buffer-dates-panel {
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  max-height: 200px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
 .bd-value {
   padding: 6px 14px;
   font-size: var(--t-micro);
@@ -2428,13 +3001,6 @@ body.sidebar-collapsed .sidebar { display: none; }
 .bd-count { color: var(--text-faint); }
 
 /* ============ PHASE 4: FRAME BROWSER ============ */
-.fn-frame-browser {
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  max-height: 260px;
-  display: flex;
-  flex-direction: column;
-}
 .fb-toolbar {
   display: flex;
   align-items: center;
@@ -2491,77 +3057,6 @@ body.sidebar-collapsed .sidebar { display: none; }
   background: var(--media-overlay);
   padding: 1px 3px;
   pointer-events: none;
-}
-
-/* ============ PHASE 4: PANEL TOGGLE BUTTONS ============ */
-.fn-panel-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-faint);
-  padding: 2px 8px;
-  font-size: var(--t-micro);
-  letter-spacing: 0.13em;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-.fn-panel-btn:hover { color: var(--text); border-color: var(--text-dim); }
-.fn-panel-btn.active { color: var(--accent); border-color: var(--accent); }
-
-/* ---- Shared toolbar-chip treatment (DATES / FRAMES / ASSET / VIDEO / META / FOCUS) ----
-   The defaults (#444 text, #1a1a1a border) all but disappeared against the #111
-   header. Lift them to a readable chip with a defined border, and force single-line
-   labels — text wrapping mid-label was making buttons unequal heights and shoving
-   the toolbar row around when stats appeared mid-typing. Active/focus states keep
-   their higher-specificity red and are unaffected. */
-.fn-panel-btn,
-.fn-collapse-btn,
-.fn-focus-btn {
-  background: var(--surface-3);
-  border-color: var(--line-3);
-  color: var(--ink-3);
-  white-space: nowrap;
-  line-height: 1.45;
-}
-.fn-panel-btn:hover,
-.fn-collapse-btn:hover,
-.fn-focus-btn:hover { color: var(--text-bright); border-color: var(--line-3); }
-
-/* Editor-header toolbar: wrap as whole chips (never mid-label) and keep the
-   status text as one nowrap unit so it can't reflow the buttons as you type. */
-.fn-hdr-tools {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-  row-gap: 6px;
-}
-.fn-hdr-stats {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-  font-size: var(--t-micro);
-  letter-spacing: 0.13em;
-  color: var(--text-dim);
-}
-.fn-hdr-stats > span { white-space: nowrap; }
-
-/* Desktop editor header: keep the button row from reflowing when a live status
-   pops in or out. The buttons and the stats (save status, ☁ cloud status, word
-   count, read time) share one flex-wrap row, so widening the stats — SAVED /
-   ☁ synced flashing in, the word count growing — tips the wrap threshold and
-   the whole toolbar jumps between one and two lines on every save. Park the
-   stats on their own reserved line under the buttons so button positions become
-   immune to any stats change. The tablet/phone bands keep their own one-line /
-   horizontal-scroll handling and never reach this width. */
-@media (min-width: 1181px) {
-  .fn-hdr-stats {
-    flex: 1 0 100%;            /* always its own full-width line beneath the buttons */
-    justify-content: flex-end; /* stats stay right-aligned under the tools */
-    min-height: 1.4em;         /* reserve the line so it never collapses/jumps */
-  }
 }
 
 /* ============ PHASE 4: PREVIEW PLACEHOLDERS ============ */
@@ -2883,10 +3378,6 @@ body.sidebar-collapsed .sidebar { display: none; }
 .sidebar { padding-left: var(--safe-left); padding-bottom: var(--safe-bottom); }
 .main { padding-right: var(--safe-right); }
 .view { padding-bottom: calc(80px + var(--safe-bottom)); }
-.fn-compose {
-  height: calc(100vh - var(--topbar-h) - var(--safe-top) - 180px - var(--kb-inset));
-  height: calc(100dvh - var(--topbar-h) - var(--safe-top) - 180px - var(--kb-inset));
-}
 /* Focus mode hides the topbar and goes truly full-screen — keep the editor
    chrome out from under the status bar. */
 body.fn-focus .layout { padding-top: var(--safe-top); }
@@ -2900,7 +3391,7 @@ body.fn-focus .layout { padding-top: var(--safe-top); }
 /* -- Kill the rubber-band: the app shell never bounces; inner scrollers
       scroll without chaining into the (unscrollable) body. -- */
 html, body { overscroll-behavior: none; }
-.main, .sidebar, .sys-ledger, .fn-compose .editor, .fn-compose .preview-pane {
+.main, .sidebar, .sys-ledger, .fn-canvas {
   overscroll-behavior: contain;
 }
 
@@ -2926,12 +3417,11 @@ html, body { overscroll-behavior: none; }
   /* …icon buttons keep their visual size (dense overlays) but inflate their
      tappable area with an invisible halo to an effective ~44px. */
   .frame-action { width: 30px; height: 30px; font-size: 0.8rem; }
-  .frame-action, .sidebar-toggle, .settings-btn, .sys-lamp, .uqp-dismiss,
-  #fn-bar-toggle-p {
+  .frame-action, .sidebar-toggle, .settings-btn, .sys-lamp, .uqp-dismiss {
     position: relative;
   }
   .frame-action::after, .sidebar-toggle::after, .settings-btn::after,
-  .sys-lamp::after, .uqp-dismiss::after, #fn-bar-toggle-p::after {
+  .sys-lamp::after, .uqp-dismiss::after {
     content: '';
     position: absolute;
     inset: -7px;
@@ -3163,19 +3653,6 @@ body.fn-bar-hidden:has(#view-fn.active) .tabbar {
 /* Reduced motion / no transitions still needs the reduced-motion tabbar rule
    below to skip the slide animation — the end state (off-screen) is identical. */
 
-/* Collapse toggle: hidden on desktop (nothing to collapse). Reuses .fn-panel-btn
-   chrome. Exactly one instance shows per form factor — the header one in
-   landscape, the compact one on the portrait action bar — so there's no dup. */
-.fn-bar-toggle { display: none; }
-@media (max-width: 1180px), (pointer: coarse) {
-  #fn-bar-toggle { display: inline-flex; align-items: center; }
-}
-@media (max-width: 920px),
-       ((min-width: 921px) and (max-width: 1180px) and (orientation: portrait)) {
-  #fn-bar-toggle { display: none; }        /* portrait bar owns it here */
-  #fn-bar-toggle-p { display: inline-flex; align-items: center; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .sheet, .sheet-overlay, .tab-btn { transition: none; }
 }
@@ -3208,13 +3685,6 @@ body.fn-bar-hidden:has(#view-fn.active) .tabbar {
   .view--bounded.active {
     --bounded-pad-b: calc(20px + var(--tabbar-rsv) + var(--safe-bottom) + var(--kb-inset));
   }
-  .fn-compose {
-    height: calc(100vh - var(--topbar-h) - var(--safe-top) - 180px
-                 - var(--tabbar-rsv) - var(--safe-bottom) - var(--kb-inset));
-    height: calc(100dvh - var(--topbar-h) - var(--safe-top) - 180px
-                 - var(--tabbar-rsv) - var(--safe-bottom) - var(--kb-inset));
-  }
-
   /* Floating chrome climbs above the bar. The link fab was missed when this
      rule was written — its fixed bottom:24px left it BEHIND the glass bar
      (z-index 200 vs the bar's 300), a barely-visible sliver at the viewport
@@ -3224,15 +3694,6 @@ body.fn-bar-hidden:has(#view-fn.active) .tabbar {
   .burst-actionbar { bottom: calc(16px + var(--tabbar-rsv) + var(--safe-bottom)); }
   .buffer-link-fab { bottom: calc(16px + var(--tabbar-rsv) + var(--safe-bottom)); }
   #upload-queue-panel { bottom: calc(12px + var(--tabbar-rsv) + var(--safe-bottom)); }
-}
-
-/* iPad-mini landscape FN split is height-bound (not scroll-bound) — subtract
-   the bar from the fixed-height editor so STAGE/SAVE stay reachable. */
-@media (min-width: 921px) and (max-width: 1180px) and (orientation: landscape) {
-  #view-fn.active {
-    padding-bottom: calc(12px + var(--tabbar-rsv) + var(--safe-bottom));
-  }
-  body.fn-focus #view-fn.active { padding-bottom: 0; }  /* bar is hidden in focus */
 }
 
 /* ============ PHASE 3: TOUCH MODALS → BOTTOM SHEETS ============ */
@@ -3411,16 +3872,19 @@ body.fn-bar-hidden:has(#view-fn.active) .tabbar {
 @media (pointer: coarse) {
   .btn:active, .publish-btn:active, .settings-btn:active, .nav-btn:active,
   .frame-action:active, .icon-btn:active, .filter-btn:active, .status-btn:active,
-  .action-btn:active, .back-btn:active, .fn-panel-btn:active, .fn-collapse-btn:active,
-  .fn-focus-btn:active, .asset-lib-pill:active, .asset-lib-item:active,
+  .action-btn:active, .back-btn:active, .fn-tool:active, .fn-chip:active,
+  .fn-btn:active, .fn-media-row:active, .asset-lib-pill:active, .asset-lib-item:active,
   .asset-lib-sort:active, .uqp-btn:active, .uqp-retry:active, .ledger-ack:active,
   .modal-close:active, .archive-card:active, .buffer-frame:active,
-  .bench-card:active, .list-toggle:active, .fb-thumb:active {
+  .bench-card:active, .list-toggle:active, .fb-thumb:active,
+  .slot-act:active, .cards-chip:active {
     transform: scale(0.97);
     opacity: 0.85;
   }
   /* Row icon controls get a workable touch size (rows are roomy enough). */
   .icon-btn { width: 34px; height: 34px; font-size: 0.85rem; }
+  /* Same bargain for the Cards view's in-tile actions: 34px in a roomy row. */
+  .slot-act, .cards-chip { min-height: 34px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .btn:active, .buffer-frame:active, .asset-lib-item:active { transform: none; }
@@ -3481,93 +3945,6 @@ body.kb-open { --tabbar-rsv: 0px; }
   .tabbar { transition: none; }
 }
 
-/* -- 5b. Portrait FN: one pane at a time, editor-first. Stacked panes buried
-      the preview (and its SAVE/STAGE actions) below a full-height editor;
-      now a segmented WRITE/PREVIEW toggle swaps panes and the actions ride
-      the portrait bar itself. Scoped to phone widths + iPad portrait — the
-      landscape 60/40 split and desktop two-pane are untouched. -- */
-.fn-portrait-bar { display: none; }
-
-@media (max-width: 920px), ((min-width: 921px) and (max-width: 1180px) and (orientation: portrait)) {
-  .fn-portrait-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 12px;
-  }
-  .fn-seg { display: flex; border: 1px solid var(--border-strong); }
-  .fn-seg-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-dim);
-    font-family: var(--font-mono);
-    font-size: var(--t-micro);
-    letter-spacing: 0.13em;
-    text-transform: uppercase;
-    padding: 10px 18px;
-    min-height: var(--tap);
-  }
-  .fn-seg-btn.active { background: var(--accent-wash); color: var(--accent); }
-  .fn-portrait-actions { display: flex; gap: 8px; }
-
-  /* Pane swap */
-  #view-fn .fn-compose { grid-template-columns: 1fr; }
-  #view-fn .preview-pane { display: none; }
-  #view-fn.pane-preview .preview-pane { display: flex; }
-  #view-fn.pane-preview .editor { display: none; }
-  /* The visible pane's own action row duplicates the portrait bar — drop it
-     (inline display:flex on the wrapper needs the !important). */
-  /* The portrait action bar already carries these buttons. With the caption
-     gone the row would be an empty 33px strip, so the whole header goes —
-     rows are the scarce thing on a phone. */
-  #view-fn .preview-pane .fn-pane-hdr { display: none !important; }
-
-  /* Height-bound as a full-height flex column tied to .main's real height —
-     the same pattern (and the same 100%-not-100vh reasoning) as the iPad-mini
-     landscape split above. The old rule here subtracted a fixed "~250px of
-     chrome" guess from 100dvh, but a phone's real pre-compose stack (title +
-     sub + meta + drafts row + rule + portrait bar) runs 450-550px, so the
-     compose overshot the viewport and the on-screen keyboard buried the
-     editor. Flex makes the geometry exact at any chrome height: the compose
-     gets whatever the header rows leave, and the calc subtracts the bar and
-     the live keyboard inset so the editor bottom rides right on the keys. */
-  #view-fn.active {
-    display: flex;
-    flex-direction: column;
-    height: calc(100% - var(--tabbar-rsv) - var(--safe-bottom) - var(--kb-inset));
-    padding: 14px 16px 10px;
-    overflow-y: auto;   /* short-viewport backstop (landscape phone) — scrolls
-                           instead of crushing the compose below min-height */
-  }
-  #view-fn .view-header,
-  #view-fn > .btn-row,
-  #view-fn > .rule-perf,
-  #view-fn .fn-portrait-bar { flex: none; }
-  #view-fn .view-header { margin-bottom: 10px; padding-bottom: 10px; }
-  #view-fn .view-title  { font-size: 1.05rem; margin-bottom: 2px; }
-  #view-fn .view-sub    { font-size: var(--t-micro); }
-  #view-fn > .rule-perf { margin: 0 0 10px; }
-  #view-fn .fn-portrait-bar { margin-bottom: 10px; }
-  /* Draft pickers share one row with + NEW DRAFT instead of stacking three
-     deep — each select flexes and lets its native text truncate. */
-  #view-fn > .btn-row { flex-wrap: nowrap; margin-bottom: 10px; }
-  #view-fn > .btn-row .field-select { flex: 1 1 0; min-width: 0; }
-  #view-fn .fn-compose {
-    flex: 1 1 auto;
-    height: auto;
-    min-height: 260px;
-  }
-
-  /* Writing means the keyboard is up: collapse the chrome that holds no text
-     input (title block, draft pickers, rule) so the compose fills everything
-     above the keys. The portrait bar stays — WRITE/PREVIEW and SAVE/STAGE are
-     the tools you reach for mid-sentence. Blur the field and it all returns. */
-  body.kb-open #view-fn .view-header,
-  body.kb-open #view-fn > .btn-row,
-  body.kb-open #view-fn > .rule-perf { display: none; }
-}
-
 /* Topbar demotes to a status strip in the band: Publish lives on the tab
    bar (thumb zone) — the top-right button is the worst reach on the device
    AND redundant. The pending stat yields at phone/portrait widths where it
@@ -3593,32 +3970,6 @@ body.kb-open { --tabbar-rsv: 0px; }
       passive scroll listener) the title compresses. #view-fn is exempt —
       its layouts are height-bound and writing wants minimal chrome. -- */
 @media (max-width: 1180px), (pointer: coarse) {
-  /* FN editor chips: ONE horizontally scrolling row instead of a 2-3 deep wrap.
-     This lived under max-width:600px — phones only — so an iPad (744-1133px)
-     never got it and the toolbar wrapped to three rows in landscape. Those extra
-     rows are stolen from the writing area, which on an iPad Mini in landscape
-     left the textarea at 211px: the reason the editor felt unusable until you
-     collapsed META and entered FOCUS by hand. The tab-bar band is the right
-     scope — it is exactly "touch, and not a desktop window". */
-  .fn-pane-hdr > span:first-child {
-    flex: 0 1 auto;
-    min-width: 64px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .fn-hdr-tools {
-    flex: 1 1 auto;
-    min-width: 0;
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-  .fn-hdr-tools::-webkit-scrollbar { display: none; }
-  .fn-panel-btn, .fn-collapse-btn, .fn-focus-btn, .fn-hdr-stats, .btn { flex: none; }
-
   .view:not(#view-fn) .view-header {
     position: sticky;
     top: 0;
@@ -3698,18 +4049,6 @@ body.kb-open { --tabbar-rsv: 0px; }
   /* Control rows reflow instead of squeezing */
   .btn-row { flex-wrap: wrap; }
   .stage-header { flex-wrap: wrap; gap: 8px; }
-  .fn-portrait-bar { flex-wrap: wrap; gap: 8px; }
-  .fn-seg-btn { padding: 8px 10px; }
-  .fn-portrait-actions { gap: 6px; }
-  .fn-portrait-actions .btn { padding-left: 10px; padding-right: 10px; }
-
-  /* FN header earns its keep on a phone: the ⌘-shortcut hint line means
-     nothing to a thumb, and the draft pickers already carry their counts —
-     the title alone says where you are. Every row cut here is a writing row
-     gained (the compose flexes into the space, § Phase 5b). */
-  #view-fn .view-sub, #view-fn .view-meta { display: none; }
-  #view-fn .view-header { margin-bottom: 8px; padding-bottom: 8px; }
-
   /* Link mode with 2+ frames selected: the centered action bar and the
      bottom-right fab share one bottom line a phone doesn't have — the bar
      (LINK/UNLINK + CANCEL) takes over and the fab yields until the
@@ -4007,22 +4346,12 @@ body.rl-lock { overflow: hidden; }
    and your writing": STUDIO is the Darkroom, DAYLIGHT is the Desk.
    ============================================================= */
 
-/* 1 — Elastic band on the open draft. The editor card wears a vertical
-   accent band while the loaded post is an unpublished draft (class toggled
-   in fnLoadPost/fnNewPost) — state you can see from across the room.
-   Runs inside the card edge: the editor clips overflow by design. */
-.fn-compose .editor { position: relative; }
-.fn-compose .editor.is-draft::before {
-  content: "";
-  position: absolute;
-  top: 0; bottom: 0; left: 0;
-  width: 4px;
-  border-radius: 0 2px 2px 0;
-  background: var(--accent);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-  z-index: 2;
-  pointer-events: none;
-}
+/* 1 — Elastic band on the open draft. It lives in § FIELD NOTES STUDIO now,
+   with the rest of the editor: a vertical rule down the left of the editor
+   CARD was unambiguous while the card was a card, but once the card became
+   the whole pane the same rule sat flush against the sidebar and read as a
+   divider. Same signal — "this one is not published yet, from across the
+   room" — moved to the underline of the studio's own bar. */
 
 /* 2 — Develop-in thumbnails: images fade up from slightly underexposed
    instead of popping in. is-loaded is added by a capture-phase load
@@ -4111,13 +4440,6 @@ body.rl-lock { overflow: hidden; }
 
 /* 6 — Editor as manuscript: the writing surface is a page on the desk —
    capped measure, own ground, hairline edge; numerals in meta rows align. */
-.fn-editor-area { background: var(--surface-0); }
-.fn-editor-area textarea {
-  width: 100%;
-  background: var(--surface-1);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
-}
-.fn-hdr-stats { font-variant-numeric: tabular-nums; }
 
 /* ============================================
    PULSE STUDIO (view-pulse)
@@ -4148,6 +4470,11 @@ body.rl-lock { overflow: hidden; }
      3. Starters are a rail you glance at on desktop and one horizontal strip on
         mobile. They were taking ~60% of the screen for inspiration you may not
         want on any given post.
+     4. (2026-08-24) WRITE MODE. A bounded column has one elastic row, and on
+        this stage that is the card — so the on-screen keyboard's ~350px came
+        out of the card alone and crushed the textarea inside it out of
+        existence. While `body.kb-open`, the rows that are not typing fold and
+        the card takes their height back. See the WRITE MODE block below.
 
    What carried over unchanged: 16px input floor (below that iOS zooms the page
    on focus and the author loses their place), 44px minimum on anything
@@ -4436,35 +4763,232 @@ body.rl-lock { overflow: hidden; }
 .pulse-dock .btn { min-height: 48px; font-size: 0.76rem; letter-spacing: 0.1em; }
 #pulse-post-btn { flex: 1 1 auto; }
 
-/* ---- the glyph tray ----
-   A popover over the stage rather than a permanent row: the glyphs follow the
-   open lane and are a shortcut, not the vocabulary — the author can type any
-   emoji into the card's own glyph slot. */
+/* ---- the glyph menu ----
+   A panel over the stage rather than a permanent row, and since 2026-08-24 ONE
+   menu holding every discipline rather than a tray that followed the open lane.
+   The report: docs/maintenance/2026-08-24-pulse-mobile-keyboard-and-glyph-menu.md.
+
+   WHY IT IS SIZED THE WAY IT IS. The old rule was
+   `left: 50%; transform: translateX(-50%)` with no `width` and no `right`, so
+   the panel's containing block ran from the stage's midpoint to its right edge
+   and it shrink-to-fit into roughly half a stage — three glyphs wide on a phone
+   with room for six. `max-width: 88vw` never bound anything. An explicit width
+   is the fix; the centring trick is fine once there is a width to centre.
+
+   SIX COLUMNS, NOT auto-fill. Each discipline carries exactly twelve
+   (js/pulse-packs.js), so six columns is two clean rows per heading at every
+   width. auto-fill would give seven on a wide panel and five on a narrow one,
+   which turns every section into a ragged last row. The tiles are ~52–62px
+   depending on the panel's width, i.e. larger than the 46px they replaced and
+   above the 44px tap floor even on a 320px phone — the owner's note, against
+   the original mockup: "the glyphs were larger and centered." */
 .pulse-tray {
   position: absolute;
   z-index: 20;
   left: 50%;
   transform: translateX(-50%);
   bottom: 96px;
+  width: min(420px, 100%);
+  max-height: min(56vh, 420px);
   display: none;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px;
-  max-width: 320px;
-  padding: 8px;
+  flex-direction: column;
+  padding: 8px 8px 6px;
   background: var(--surface-1);
   border: 1px solid var(--line-3);
   border-radius: 12px;
   box-shadow: var(--shadow-3, 0 12px 32px rgba(0, 0, 0, 0.6));
 }
 .pulse-tray.open { display: flex; }
-.pulse-glyph {
-  width: 46px;
-  height: 46px;
+
+/* Tap-outside-to-dismiss. Shown by the panel's own state — see the markup note
+   in js/console/pulse.js — so there is no second class to keep in step. */
+.pulse-tray-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 19;
+  display: none;
+  background: var(--scrim);
+}
+.pulse-tray.open + .pulse-tray-scrim { display: block; }
+
+.pulse-tray-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 2px 6px;
+}
+.pulse-tray-title {
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.pulse-tray-x {
+  min-width: 32px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.4rem;
+  background: none;
+  border: none;
+  color: var(--ink-3);
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.pulse-tray-x:hover { color: var(--ink-1); }
+.pulse-tray-hint {
+  margin-right: auto;
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-x);
+}
+
+/* ---- what is on the card, and how to take it off again ----
+   Reported 2026-08-24, second pass: "you can't remove an individual glyph or
+   character without pressing reset card" — and RESET CARD throws away the line
+   you wrote with it. So the panel now carries the card's glyphs as chips, each
+   one a tap away from gone.
+
+   It is not just a nicety over toggling the tiles. A glyph picked from the
+   PLATFORM's emoji keyboard has no tile in the curated grid to un-toggle, so
+   before this row there was genuinely no way back from one except RESET CARD. */
+.pulse-tray-picked {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 2px 8px;
+}
+.pulse-tray-picked[hidden] { display: none; }
+.pulse-picked {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 8px 0 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 18px;
+  color: var(--ink-2);
+  font-family: inherit;
+  cursor: pointer;
+}
+.pulse-picked-g { font-size: 1.15rem; line-height: 1; }
+.pulse-picked-x { font-size: 0.95rem; color: var(--ink-3); }
+.pulse-picked:hover { background: var(--accent-wash); }
+.pulse-picked:hover .pulse-picked-x { color: var(--accent-text); }
+
+/* The doorway to the platform's own emoji keyboard — see `_pulseSetGlyphAny`
+   in js/console/pulse.js for why the whole set is an <input> and not a table.
+   It rides .pulse-input, so it already carries the 16px floor that stops iOS
+   zooming the page on focus. */
+.pulse-tray-any {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+/* THE SCROLLER, AND ITS INDICATOR.
+   Six sections do not fit, so the menu has to say so. It says it with a fade
+   plus a hairline at whichever edge has more behind it, and with nothing at all
+   at the ends — a cue that is always on is decoration, and at the bottom of the
+   list it is a lie that dims a real row.
+
+   IT IS DRAWN IN FRONT, ON A WRAPPER. The tidy version of this is the CSS-only
+   `background-attachment: local` trick — opaque covers riding the content over
+   fixed shadows underneath — and it was written that way first and did not
+   work: background layers paint BEHIND an element's content, and every tile
+   here carries its own opaque `--surface-2`, so the shadow strip is covered by
+   whatever row happens to be at the edge. Verified in Chromium, not reasoned
+   about. Hence a wrapper with two pointer-events-none pseudo-elements over the
+   scroller's edges, and `_pulseTrayCue()` (js/console/pulse.js) toggling which
+   of them shows.
+
+   (A sticky heading is the other common answer. The studio's guard in
+   tests/pulse-console.test.js forbids `position: sticky` on this surface for a
+   reason that predates this menu, and non-sticky headings read fine.) */
+.pulse-tray-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.pulse-tray-scroll::before,
+.pulse-tray-scroll::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 22px;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-1, 0.12s) var(--ease-out, ease-out);
+}
+.pulse-tray-scroll::before {
+  top: 0;
+  background: linear-gradient(var(--surface-1) 12%, rgba(0, 0, 0, 0));
+  border-top: 1px solid var(--line-2);
+}
+.pulse-tray-scroll::after {
+  bottom: 0;
+  background: linear-gradient(rgba(0, 0, 0, 0), var(--surface-1) 88%);
+  border-bottom: 1px solid var(--line-2);
+}
+.pulse-tray-scroll[data-up]::before { opacity: 1; }
+.pulse-tray-scroll[data-down]::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .pulse-tray-scroll::before,
+  .pulse-tray-scroll::after { transition: none; }
+}
+.pulse-tray-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  /* A flick through the glyphs must not chain into the view behind the panel. */
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+}
+.pulse-tray-body::-webkit-scrollbar { width: 4px; }
+.pulse-tray-body::-webkit-scrollbar-thumb { background: var(--line-3); border-radius: 2px; }
+
+/* No side padding, and a 5px gutter. Both are load-bearing at the narrow end:
+   the studio's rule is 44px on anything tappable, and at 320px (the smallest
+   phone still in circulation) six columns only clear it once the group padding,
+   the gutters and the thin scrollbar are all counted. 320 − 16 panel − 11
+   scrollbar − 25 gutters = 268 ÷ 6 = 44. Measured in Chromium at 320×568, not
+   estimated — the first cut of this grid came out 40px wide there. */
+.pulse-glyph-group { padding: 0; }
+.pulse-glyph-group + .pulse-glyph-group { margin-top: 10px; }
+.pulse-glyph-head {
+  margin: 0 0 6px;
+  font-family: inherit;
+  font-size: var(--t-micro);
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-x);
+}
+/* The lane you have open is marked rather than filtered — the menu's order
+   never changes, so this is the only thing that moves when a lane is tapped. */
+.pulse-glyph-group.is-lane .pulse-glyph-head { color: var(--accent-text); }
+.pulse-glyph-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
+}
+.pulse-glyph {
+  width: 100%;
+  aspect-ratio: 1;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.7rem;
+  line-height: 1;
   background: var(--surface-2);
   border: 1px solid var(--line-2);
   border-radius: 8px;
@@ -4472,12 +4996,33 @@ body.rl-lock { overflow: hidden; }
   transition: border-color 0.15s, transform 0.15s;
 }
 .pulse-glyph:hover { border-color: var(--accent); transform: scale(1.08); }
+/* Already on the card. The tile is a TOGGLE now — tap again and it comes off —
+   so it has to look like something that is currently on, not merely hovered. */
+.pulse-glyph.is-on {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.pulse-tray-foot {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
 .pulse-glyph--clear {
+  min-height: 36px;
+  padding: 0 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
   font-family: inherit;
   font-size: 0.6rem;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--ink-3);
+  cursor: pointer;
 }
+.pulse-glyph--clear:hover { border-color: var(--accent); color: var(--ink-1); }
 
 /* ---- the footer fold ----
    Two free-text cells, collapsed. Optional metadata should cost one row on a
@@ -4660,7 +5205,13 @@ html[data-theme="light"] .pulse-card-slot .wk-pulse {
   color: var(--ink-1);
   width: 100%;
   flex: 0 1 auto;
-  min-height: 0;
+  /* A FLOOR, not min-height: 0. This is the element the author is typing into,
+     and it was the one the flex column crushed first: min-height 0 let it
+     shrink to nothing, and the card clips its overflow, so it was cut out of
+     the card entirely (2026-08-24). Two lines is the smallest thing worth
+     calling a writing surface — the row that yields next should be a
+     decoration, never this one. */
+  min-height: 2.6em;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 5px;
@@ -4820,7 +5371,217 @@ html[data-theme="light"] .pulse-card-slot textarea.wk-p-text:focus {
   .pulse-dock .btn { min-height: 46px; font-size: 0.72rem; }
   .pulse-more { max-width: 100%; }
 
-  .pulse-tray { bottom: 50%; max-width: 88vw; }
+  /* On a phone the menu spans the stage and sits ON the stage floor.
+     NOT `position: fixed`: fixed boxes are laid out against the LAYOUT
+     viewport, which neither mobile platform shrinks for the keyboard, so a
+     bottom-fixed panel would sit behind the keys. The stage is already
+     shortened correctly (the bounded view subtracts --kb-inset), so anchoring
+     to it is right in both keyboard states for free. */
+  .pulse-tray {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    transform: none;
+    max-height: min(72%, 400px);
+    border-radius: 12px 12px 10px 10px;
+  }
+}
+
+/* ---- WRITE MODE — the keyboard is up, so the card takes the room back ----
+
+   THE DEFECT (owner report, 2026-08-24, Chrome Android; full write-up in
+   docs/maintenance/2026-08-24-pulse-mobile-keyboard-and-glyph-menu.md):
+   with the keys up you could not see the line you were typing. The keyboard
+   was not covering anything — --kb-inset lifted the whole studio above it
+   correctly. The card COLLAPSED. On this stage every row is `flex: 0 0 auto`
+   except `.pulse-card-slot`, so when the bounded column lost ~350px in one
+   step the single elastic child paid all of it, and the card came out ~90px
+   tall. Inside it `.wk-p-text` was `flex: 0 1 auto; min-height: 0` and
+   `.wk-pulse` is `overflow: hidden`, so the textarea shrank to nothing and was
+   clipped away — while the empty card's `glyph`-tier placeholder held its 4rem
+   and took what was left.
+
+   THE FIX IS THE SAME SHAPE AS THE 2026-08-13 REDESIGN: change the layout,
+   don't add stickiness. While the keys are up, the rows that are not typing
+   fold — the lane reel, the starter strip, the palette, the RECENT trigger and
+   an unopened footer fold — and the card takes their ~190px. Everything comes
+   back the instant the keyboard drops, so the surface you approve the card on
+   is still the full one.
+
+   AN OPEN FOOTER FOLD IS EXEMPT (`:not([open])`). If the author opened it they
+   may be typing INTO it, and collapsing a fold with focus inside it would blur
+   the field and drop the keyboard — the bug, wearing the fix's clothes.
+
+   THE DOCK STAYS. POST PULSE is the next thing you want after the last word.
+
+   In the tab-bar BAND rather than the 900px block, for the reason
+   tests/console-viewport.test.js was written after: an iPad Mini in landscape
+   is 1133px and coarse, sails past 900px, and is the shortest surface of all
+   once the keys are up. */
+@media (max-width: 1180px), (pointer: coarse) {
+  body.kb-open #view-pulse .pulse-lanes,
+  body.kb-open #view-pulse .pulse-strip,
+  body.kb-open #view-pulse .pulse-palette,
+  body.kb-open #view-pulse .pulse-log-btn,
+  body.kb-open #view-pulse .pulse-more:not([open]) { display: none; }
+
+  /* THE HEADER'S ORIENTATION LINES FOLD TOO, and the first cut of write mode was
+     wrong to leave them. Measured on a 412x839 phone with the platform's emoji
+     panel up: topbar + view header came to 190px of the 409 left after the keys
+     — 46% of the screen, more than the card itself was getting. "LIVE IN
+     SECONDS — NO PUBLISH, NO DEPLOY" is read once, on the way in; it is not
+     worth a fifth of the surface at the moment of writing. The TITLE stays, so
+     the view is still anchored and does not read as having navigated away. */
+  body.kb-open #view-pulse .view-header--tight .view-meta { display: none; }
+  body.kb-open #view-pulse .view-header--tight {
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+  }
+
+  /* The glyph yields FIRST, and it yields to a fixed size rather than to the
+     tier ladder — an empty card is tier `glyph`, whose 4rem hero is exactly
+     what was eating the room the field needed. It goes back to the ladder the
+     moment the keyboard does. */
+  body.kb-open #view-pulse .pulse-card-slot .wk-pulse .wk-p-glyph {
+    font-size: 1.8rem;
+    align-self: flex-start;
+  }
+  /* Top-aligned while writing: with the keys up the card is short enough that
+     centring a growing field pushes its first line off the top edge. The true
+     centred preview is what you see the moment you stop typing. */
+  body.kb-open #view-pulse .pulse-card-slot .wk-p-center { justify-content: flex-start; }
+  /* The field takes the room the folded rows freed — up to a point. Uncapped
+     it ate whole cards on the big surfaces (450px of textarea inside a 4:5
+     tablet card), and the half of it below the keyboard line is a field you
+     cannot see: worse than the crushed one, not better. Eight lines is more
+     than any pulse the tier ladder still calls a pulse, and it is above what
+     every phone in the table reaches on its own, so the cap binds only where
+     it should. */
+  body.kb-open #view-pulse .pulse-card-slot .wk-p-text {
+    flex: 1 1 auto;
+    max-height: 8em;
+  }
+  /* The card's own padding yields last, and only while the keys are up. At
+     320x568 — the smallest phone still in circulation, and ~350px of usable
+     screen once the keyboard lands — the folded rows are not quite enough on
+     their own: the field overshot the card's bottom edge by 2px and was clipped
+     again. Twelve px back from the padding and the gap closes it with room.
+     Measured in Chromium at that size; every larger phone had already cleared
+     it. */
+  body.kb-open #view-pulse .pulse-card-slot .wk-pulse {
+    padding: 12px;
+    gap: 6px;
+    /* THE FLOOR, AND ITS RELEASE VALVE. Folding rows buys the card ~190px,
+       which is plenty on every phone that ships today and NOT enough on a
+       320x568 one: measured in Chromium, that device leaves the whole studio
+       ~151px once the keyboard takes 216 of 568, and the field overshot the
+       card's bottom edge again. So the card gets a floor, and the rule below
+       gives the surface somewhere to put the overflow. */
+    min-height: 160px;
+  }
+}
+
+/* ---- the emoji keyboard is a keyboard too: the menu yields to it ----
+
+   Reported 2026-08-24, second pass: "when clicking into the type any emoji area
+   the keyboard overlays the glyph overlay, and the glyph overlays the card
+   preview."
+
+   Measured on a Pixel-sized viewport with the platform's EMOJI panel up (430px,
+   noticeably taller than its letter keyboard): the menu correctly stayed above
+   the keys, and squeezed its scroller to EXACTLY ZERO doing it — 876px of grid
+   in 0px of box — while still covering all but 58px of the card. So the panel
+   was holding a full menu's chrome around no menu at all, in front of the one
+   thing the author wanted to watch.
+
+   The honest read: while the platform's picker is open, the curated grid has
+   nowhere to be and is not what is being used. So the panel stops pretending to
+   be a menu and becomes a bar — the title, the chips for what is already on the
+   card, and the field being typed into. The grid and NO GLYPH fold; the card
+   comes back into view above it; the scrim goes clear so it is actually
+   readable, while still catching the tap that dismisses.
+
+   `:has(#pulse-glyph-any:focus)` and not `:focus-within`: a curated tile taking
+   keyboard focus is not this state. Gated on `body.kb-open` so a desktop click
+   into the same field, which raises no keyboard, keeps the whole menu. Where
+   `:has()` is unsupported the rules simply do not apply and the surface behaves
+   as it did before — no worse. */
+@media (max-width: 1180px), (pointer: coarse) {
+  /* IN FLOW, not over the card. Collapsing the panel alone was not enough — it
+     is still ~147px anchored to the stage floor, which on a phone leaves 61px
+     of card, i.e. the kicker. `position: relative` rather than `static`: the
+     panel has to keep a z-index, and a static box ignores one, so it would drop
+     behind its own scrim. */
+  body.kb-open #view-pulse .pulse-tray:has(#pulse-glyph-any:focus) {
+    position: relative;
+    inset: auto;
+    transform: none;
+    width: auto;
+    max-height: none;
+    margin-top: auto;
+  }
+  body.kb-open #view-pulse .pulse-tray:has(#pulse-glyph-any:focus) .pulse-tray-scroll,
+  body.kb-open #view-pulse .pulse-tray:has(#pulse-glyph-any:focus) .pulse-tray-foot {
+    display: none;
+  }
+  /* The field is the last row now, so the panel's own bottom padding is the
+     only gap it needs. */
+  body.kb-open #view-pulse .pulse-tray:has(#pulse-glyph-any:focus) .pulse-tray-any {
+    margin-bottom: 0;
+  }
+  /* The rows that write mode kept are not the ones this state needs. You are
+     mid-pick in the platform's own picker: the tier readout is about the LINE,
+     and POST is one dismissal away. Folding them is what pays for the card. */
+  body.kb-open #view-pulse:has(#pulse-glyph-any:focus) .pulse-stage-status,
+  body.kb-open #view-pulse:has(#pulse-glyph-any:focus) .pulse-dock { display: none; }
+  /* And the card's floor comes down to match, so a small phone still fits the
+     bar without the column overflowing a view that clips. */
+  body.kb-open #view-pulse:has(#pulse-glyph-any:focus) .pulse-card-slot .wk-pulse {
+    min-height: 120px;
+  }
+  /* Clear, not gone: the tap-outside dismiss has to survive. */
+  body.kb-open #view-pulse .pulse-tray:has(#pulse-glyph-any:focus) + .pulse-tray-scrim {
+    background: transparent;
+  }
+}
+
+/* ---- write mode's release valve, for the surfaces that still cannot pay ----
+
+   Folding rows buys the card ~190px, and on every phone from 393x852 down to
+   412x839 that is the end of it: the card comes out 220-240px, the field is
+   whole, the dock stays above the keys, nothing scrolls. Two shapes are still
+   short after the fold, and for those the honest answer is the one
+   `#view-fn.active` and the 460px landscape backstop already reach for —
+   SCROLL, rather than crush the rows or clip the dock under the glass:
+
+     - a small phone (320x568 through 375x667): ~150px of studio once the
+       keyboard takes its ~39%, which will not hold a card, a tier row and a
+       dock however the rows are folded;
+     - a tablet in LANDSCAPE (1133x744): the sideways-stage grid puts the dock
+       in the right column, and with the keys up that column ended BELOW them
+       with nothing that could scroll to it — the same unreachable-dock shape
+       reported on 2026-08-14, in a state that report did not cover.
+
+   WHY A HEIGHT THRESHOLD AND NOT `body.kb-open` ALONE. The valve makes the view
+   `height: auto`, which un-anchors every `height: 100%` inside it — including
+   the 601-900px rule that keeps a tablet's card at its true 4:5 instead of a
+   slab. Applied unconditionally it cost an iPad in PORTRAIT its `max-height`
+   and grew the card to a full 420x525 with the dock pushed off the fold, for a
+   surface that had ~700px and needed none of it. 780px is the line: a soft
+   keyboard runs 38-40% of the device's height on both platforms, so this is
+   "less than ~470px of usable surface once the keys land" — the same quantity
+   the 460px backstop below is about, measured before the keyboard rather than
+   after. Every size in the table was measured in Chromium; none of it was
+   estimated. */
+@media (max-height: 780px) {
+  body.kb-open #view-pulse.view--bounded.active {
+    height: auto;
+    min-height: 100%;
+    /* `overflow-y` alone, so the shell shorthand's `overflow-x: hidden` still
+       holds and the lane reel cannot scroll the page sideways. */
+    overflow-y: auto;
+  }
 }
 
 /* ---- the short-viewport backstop ----
@@ -4935,4 +5696,318 @@ html[data-theme="light"] .pulse-card-slot textarea.wk-p-text:focus {
   /* The tray is a popover on the CARD's glyph, so it centres over the card's
      column rather than over the stage's full width. */
   .pulse-tray { left: 25%; }
+}
+
+/* ============================================
+   CARDS (view-cards)
+   --------------------------------------------
+   The homepage grid, twice: LIVE (what is on the site now) beside STAGED (what
+   the next publish would make it), with a per-slot diff marker between them.
+
+   SCHEMATIC, ON PURPOSE. These are not the homepage's cards and must not
+   pretend to be. The console does not load css/main.css — its tokens are
+   `:root`/preset-scoped and would collide with these — and cloning the card
+   markup here would create a second stylesheet to keep in sync with the public
+   one, which is exactly how a preview starts lying. So a slot is a console
+   row: number, kicker, thumbnail, title, marker. Faithful about WHICH card is
+   in WHICH slot and why; honest that pixel truth is one click away on the
+   homepage. (A shadow-DOM render of the real card markup with a :root → :host
+   token rewrite is the recorded v2 upgrade path — deliberately not attempted.)
+
+   Every ground here is a token. Nothing enumerates a colour, so the block
+   follows the instance's preset and both themes for free.
+   ============================================ */
+
+#cards-body { padding-bottom: 8px; }
+
+.cards-loading,
+.cards-note {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1.2px;
+  color: var(--ink-3);
+}
+.cards-note {
+  letter-spacing: 0.6px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent-line);
+  background: var(--surface-1);
+}
+
+/* Two equal columns on a desktop; stacked on anything narrow, because two
+   half-width columns of tiles on a phone are two unreadable columns. */
+.cards-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .cards-columns { grid-template-columns: minmax(0, 1fr); }
+}
+
+.cards-col {
+  min-width: 0;
+  border: 1px solid var(--line-2);
+  background: var(--surface-1);
+}
+.cards-col-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-2);
+}
+.cards-col-title {
+  font-family: var(--font-display);
+  font-size: var(--t-label);
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--ink-1);
+}
+.cards-col-note {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1px;
+  color: var(--ink-3);
+}
+.cards-warn {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.6px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-left: 2px solid var(--warn);
+}
+.cards-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+/* ---- one slot ----
+   A row, not a card: the tile is a schematic of a card, so it reads as console
+   furniture. The thumbnail keeps the homepage tile's 4:5 shape at small size so
+   a crop tuned for that card previews in the proportion it will actually take. */
+.card-slot {
+  display: grid;
+  /* number · thumbnail · meta · status. The status column is `auto` and empty
+     tiles collapse it to nothing, so a row with no marker keeps no gutter. */
+  grid-template-columns: 22px 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  min-height: var(--tap);
+  background: var(--surface-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-1);
+}
+.card-slot.is-empty { opacity: 0.55; }
+.card-slot.is-empty .slot-meta { grid-column: 2 / 4; }
+
+.slot-n {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-x);
+  text-align: right;
+}
+.slot-thumb {
+  width: 44px;
+  height: 55px;            /* 4:5, the recent-work card's crop */
+  overflow: hidden;
+  background: var(--media-well);
+  border-radius: var(--r-1);
+}
+.slot-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* A kind with no picture (pulse, audio, a plain field note) keeps the column so
+   the rows stay aligned — a collapsed cell would make every text slot indent
+   differently from its neighbours. */
+.slot-thumb.is-blank { background: var(--surface-3); }
+
+.slot-meta { min-width: 0; }
+.slot-kick {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1.4px;
+  color: var(--accent-text);
+}
+.slot-title {
+  font-family: var(--font-display);
+  font-size: var(--t-label);
+  color: var(--ink-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slot-sub,
+.slot-live {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.8px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The pulse is already on the site and no publish will change it — the tile
+   says so rather than leaving it to be inferred from an UNCHANGED marker. */
+.slot-live { color: var(--ok); }
+
+/* ---- markers ----
+   Only the two that mean "this is about to change" carry the accent; UNCHANGED
+   is deliberately quiet, because a column where everything shouts says nothing. */
+.slot-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.slot-mark,
+.slot-badge {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1.2px;
+  padding: 1px 5px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--line-3);
+  color: var(--ink-3);
+  background: var(--surface-1);
+  white-space: nowrap;
+}
+.slot-mark[data-mark="NEW"],
+.slot-mark[data-mark="REPLACED"] {
+  color: var(--accent-text);
+  border-color: var(--accent-line);
+  background: var(--accent-wash);
+}
+.slot-mark[data-mark="GONE"] {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: transparent;
+}
+
+/* ---- the honest degraded state ----
+   recent-index.js is a separate <script> tag; a blocked request or a stale
+   installed copy means the engine is simply absent. Say so — the console is
+   fully usable, only the preview is missing. Never a red latch. */
+.cards-unavailable {
+  padding: 16px;
+  border: 1px dashed var(--line-3);
+  background: var(--surface-1);
+}
+.cards-unavailable-mark {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1.6px;
+  color: var(--ink-3);
+  margin-bottom: 8px;
+}
+.cards-unavailable p {
+  font-size: var(--t-body);
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 62ch;
+}
+.cards-unavailable code {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-1);
+}
+
+/* ---- actions on a staged tile ----
+   Only the STAGED column carries these: the LIVE column is a record of what is
+   already published, so there is nothing there to act on. Compact chips by
+   default; PHASE 4c gives them a real touch size and a press acknowledgment on
+   a coarse pointer, the same bargain .icon-btn already makes in a list row. */
+.slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.slot-act {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  color: var(--ink-2);
+  background: var(--surface-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.slot-act:hover { color: var(--ink-1); border-color: var(--line-3); }
+/* "Open the surface this came from" is navigation, not a change to the site —
+   it should not read with the same weight as taking a card down. */
+.slot-act--quiet { color: var(--ink-3); background: none; }
+
+/* ---- the two undo affordances ----
+   No stack, by design (docs/cards-console-vision.md §2.4): the chip is the live
+   memory of the last displacing star, the shelf is stateless and read straight
+   off the data, so it survives a reload where the chip does not. */
+.cards-undo {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+.cards-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cards-chip:hover { color: var(--ink-1); border-color: var(--line-3); }
+.cards-chip img {
+  width: 20px;
+  height: 25px;          /* 4:5, same crop the card takes */
+  object-fit: cover;
+  border-radius: 1px;
+  background: var(--media-well);
+}
+/* The one action in this view that reverses another — worth the accent. */
+.cards-chip--undo {
+  align-self: flex-start;
+  color: var(--accent-text);
+  border-color: var(--accent-line);
+  background: var(--accent-wash);
+}
+
+.cards-shelf-head {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 1.4px;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+}
+.cards-shelf-head span {
+  letter-spacing: 0.6px;
+  color: var(--ink-x);
+  margin-left: 6px;
+}
+.cards-shelf-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }

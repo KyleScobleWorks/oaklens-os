@@ -18,7 +18,7 @@
 //
 // Extracted from console-ui.js 2026-07-29. See dev/console-module-plan.md.
 
-import { STATE, bumpStage, save } from '../console-state.js';
+import { STATE, stageChange, save } from '../console-state.js';
 import { getToken, uploadFilesWithRetry } from '../console-api.js';
 import { showToast, startProgress, updateProgress, endProgress } from '../console-telemetry.js';
 import { toast, refreshSurface } from './chrome.js';
@@ -257,7 +257,12 @@ export function _markEntryUploadDone(item) {
   entry._uploaded = true;
   entry.image = null;  // drop local blob; CDN URL via cdnThumb()
   entry.src = null;    // also clear src for wallpapers
-  bumpStage(item.surface);   // stage into the publish count only now that upload is confirmed
+  // Stage into the publish count only now that upload is confirmed.
+  stageChange(item.surface, {
+    id: entry.id,
+    label: `${entry.title || entry.filename || item.surface + ' item'} — new`,
+    kind: 'add',
+  });
   save();
   refreshSurface(_VIEW_OF_SURFACE[item.surface]);
   if (item.surface === 'library') scheduleLibrarySync();

@@ -22,7 +22,7 @@
 // rows, which run in global scope, so every one of them must stay an exported
 // function (see the asset-library header for what happens otherwise).
 
-import { STATE, save, bumpStage, trashItem } from '../console-state.js';
+import { STATE, save, stageChange, trashItem } from '../console-state.js';
 import { logEvent } from '../console-telemetry.js';
 import { toast, escapeHTML, escapeAttrJS, refreshSurface, hideOverlay } from './chrome.js';
 import { todayISO, uid, cleanFilename } from './utils.js';
@@ -263,7 +263,7 @@ export function _audioPromote(id) {
     // taking a live card apart after a publish left the counter clamped at 0 by
     // bumpStage's Math.max: the console said NO PENDING CHANGES and publish
     // refused to run, and the card could not be removed from the site at all.
-    bumpStage('audio');
+    stageChange('audio', { id: t.id, label: `${t.title || t.filename} — off the homepage card`, kind: 'feature' });
     toast('Removed from homepage card', 'info');
   } else {
     const currentFeatured = STATE.audio.filter((a) => a.featured);
@@ -273,7 +273,7 @@ export function _audioPromote(id) {
     }
     t.featured = true;
     t.featured_order = currentFeatured.length + 1;
-    bumpStage('audio');
+    stageChange('audio', { id: t.id, label: `${t.title || t.filename} — on the homepage card`, kind: 'feature' });
     toast(currentFeatured.length === 0 ? '✓ Added to homepage card' : `✓ Added to homepage playlist (#${t.featured_order})`, 'success');
   }
   save();
@@ -281,14 +281,21 @@ export function _audioPromote(id) {
 }
 
 export function _audioClearCard() {
-  const count = STATE.audio.filter((a) => a.featured).length;
+  const clearedIds = STATE.audio.filter((a) => a.featured).map((a) => a.id);
   STATE.audio.forEach((a) => {
     a.featured = false;
     delete a.featured_order;
   });
   // One gesture, one staged change — see _audioPromote above for why this is
-  // not `-count`.
-  if (count > 0) bumpStage('audio');
+  // not `-count`. Every cleared track's id rides the one row: each of them
+  // changed, so each needs sync protection.
+  if (clearedIds.length > 0) {
+    stageChange('audio', {
+      ids: clearedIds,
+      label: `homepage card cleared (${clearedIds.length} track${clearedIds.length === 1 ? '' : 's'})`,
+      kind: 'feature',
+    });
+  }
   save();
   if (typeof renderAudio === 'function') renderAudio();
   toast('Homepage audio card cleared', 'info');
@@ -300,7 +307,7 @@ export function _audioToggleEpisode(id) {
   entry.episode = !entry.episode;
   // Taking a track OUT of the feed is a change to publish, exactly like putting
   // one in — see _audioPromote above.
-  bumpStage('audio');
+  stageChange('audio', { id: entry.id, label: `${entry.title || entry.filename} — ${entry.episode ? 'into' : 'out of'} the podcast feed` });
   save();
   renderAudio();
   // The distinction that matters: the feed is what podcast apps subscribe to,
@@ -313,7 +320,7 @@ export function _audioToggleDownload(id) {
   const entry = STATE.audio.find((a) => a.id === id);
   if (!entry) return;
   entry.download = !entry.download;
-  bumpStage('audio');
+  stageChange('audio', { id: entry.id, label: `${entry.title || entry.filename} — download link ${entry.download ? 'shown' : 'hidden'}` });
   save();
   renderAudio();
   toast(entry.download ? '✓ Download link shown' : 'Download link hidden',
@@ -336,7 +343,7 @@ export function _audioEdit(id) {
   if (!entry._imported) {
     entry.slug = audioUniqueSlug(entry.title, STATE.audio, entry.id);
   }
-  bumpStage('audio');
+  stageChange('audio', { id: entry.id, label: `${entry.title || entry.filename} — details edited` });
   save();
   renderAudio();
   toast('✓ Updated', 'success');

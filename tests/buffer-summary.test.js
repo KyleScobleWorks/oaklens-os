@@ -6,6 +6,12 @@
 //      public buffer page or a citation breaks.
 //   2. Only featured, non-dark frames with media are returned, newest first,
 //      carrying the point data the card needs, honoring the limit.
+// The fixture below carries TWO featured entries ON PURPOSE. The console write
+// path is exclusive (starring un-stars the previous frame — toggleBufferFeatured,
+// pinned by tests/buffer-featured.test.js), but buffer.json published by an
+// older console can legitimately carry several flags, and this endpoint must
+// keep degrading to "newest wins" rather than erroring or picking arbitrarily.
+// Console writes one; server survives many. Do not make the server exclusive.
 // localDay pins the day bucket to the project timezone (Intl, machine-TZ
 // independent), so these assertions are stable on any CI box.
 import { describe, it, expect } from 'vitest';

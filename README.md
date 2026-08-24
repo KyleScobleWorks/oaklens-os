@@ -1,6 +1,6 @@
 # OAKLENS OS
 
-**Claim your space. Hold the keys.**
+**Your work. Published free.**
 
 [![CI](https://github.com/oaklensart/oaklens-os/actions/workflows/ci.yml/badge.svg)](https://github.com/oaklensart/oaklens-os/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)

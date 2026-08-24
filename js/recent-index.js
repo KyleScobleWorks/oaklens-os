@@ -8,12 +8,17 @@
 
    Merges data/archive.json (photo cards) + data/posts.json (Field-Note text
    cards) + data/audio.json (audio cards), takes the most recent items, and
-   renders a 3-up mixed row into #recent-index. Text cards carry the
+   renders a 3-up mixed row into #recent-index. Rendering goes through the
+   card-engine seam (CARD_LAYOUTS / resolveLayout / CARD_KINDS / buildCard):
+   kind is fixed identity, layout is a per-entry choice, and the default
+   layout is byte-identical to the pre-engine renderer. Text cards carry the
    adaptive-tier craft: a render-time drop cap, a blinking editor caret, and
    statement/feature/standard sizing so short posts read as intentional and
-   long ones fill like the preview. Audio cards carry a waveform player drawn
-   from pre-measured peaks (js/audio-player.js) — no audio is fetched until
-   someone presses play. A MISSING data file (an un-seeded fork) falls back to
+   long ones fill like the preview. A note can instead opt into the `hero`
+   layout and lead with its picture — gated on the picture actually being
+   there, so a missing hero falls back to the text tile. Audio cards carry a
+   waveform player drawn from pre-measured peaks (js/audio-player.js) — no
+   audio is fetched until someone presses play. A MISSING data file (an un-seeded fork) falls back to
    the bundled CC0 samples — the same split the archive/wall pages make
    (missing → samples, empty → empty); audio has no samples and so treats both
    the same.
@@ -188,8 +193,13 @@
   // where NOTHING is actually recent — three owner-chosen tiles and no work.
   // So: the pulse always wins slot 0, and at most TWO pins are visible at once.
   // When a pulse is live, the OLDER of (featured audio, featured RAW) yields its
-  // pin and drops back into the newest-first pool to compete on date like
-  // anything else. At least one tile is always genuinely recent.
+  // pin and DOES NOT RENDER this cycle. It is not demoted into the newest-first
+  // pool: that pool holds archive + posts only, and a featured item can be from
+  // any period — a starred 2019 frame would lose every date comparison in it
+  // anyway, so it would vanish either way, but *sometimes*, depending on what
+  // else was published. Deterministic absence beats random presence. (This
+  // comment claimed the demotion happened until 2026-08-23; the code never did
+  // it, and the code is right.) At least one tile is always genuinely recent.
   var PULSE_SLOT = 0;
   var VISIBLE_PINS = 2;
   function pinPulse(items, pulseItem, gridSize) {
@@ -302,6 +312,81 @@
     return picks;
   }
 
+  // ---- THE CARD ENGINE (core seam) ----
+  // A card is a KIND wearing a LAYOUT. Kind is identity and is fixed — photo,
+  // text, audio, pulse — and each kind owns a small named set of layouts.
+  // 'default' is always in the set and must ADD NOTHING to the markup: the
+  // untouched grid has to stay byte-identical to the pre-engine renderer
+  // (tests/card-engine.test.js pins this against captured fixtures), which is
+  // what lets a fork that configures nothing keep publishing untouched.
+  // A non-default layout surfaces as data-layout on the card root; JS sets
+  // attributes, CSS owns everything downstream — the same division the tier
+  // ladder already uses (data-tier), so a layout is a stylesheet concern the
+  // moment it leaves this file.
+  var CARD_LAYOUTS = {
+    photo: ['default'],
+    // 'hero': a field note leads with its hero picture instead of the
+    // typographic tile. Opt-in per post (the FN composer writes
+    // card: { layout: 'hero' }) and gated on the picture actually being
+    // there — see CARD_GATES below.
+    text: ['default', 'hero'],
+    audio: ['default'],
+    pulse: ['default'],
+  };
+
+  // An unknown or unregistered layout resolves to 'default', never to a broken
+  // card: content published by a NEWER console (or hand-edited data) must
+  // degrade to today's rendering on an older engine, not throw.
+  function resolveLayout(kind, want) {
+    var set = CARD_LAYOUTS[kind] || ['default'];
+    return (typeof want === 'string' && set.indexOf(want) !== -1) ? want : 'default';
+  }
+
+  // The per-entry descriptor: an entry may carry `card: { layout: '<name>' }`.
+  // The object shape (not a bare string) is deliberate — future per-card
+  // decisions (slot intent, source) join it as keys instead of new top-level
+  // fields on every content type. Absent, malformed, or unknown → default.
+  function cardDescriptor(entry) {
+    var c = entry && entry.card;
+    return { layout: (c && typeof c.layout === 'string') ? c.layout : '' };
+  }
+
+  // ---- the image gate (v1) ----
+  // The one thing a picture-backed layout needs is a picture it can build a
+  // CDN URL from, and that means a bare filename: a data:/blob: composer
+  // preview, an absolute URL or a path all resolve to a broken tile. Anything
+  // doubtful returns '' — and a broken image on the homepage is worse than a
+  // text card, so the layout falls back SILENTLY rather than half-rendering.
+  // Deliberately a simple gate, not the full image ladder (owner decision,
+  // 2026-08-23 — docs/cards-console-vision.md §3 Chunk 2).
+  function heroFilename(entry) {
+    var h = entry && (entry.hero_filename || entry.hero);
+    if (typeof h !== 'string') return '';
+    h = h.trim();
+    if (!h || h.indexOf('/') !== -1 || /^[a-z][a-z0-9+.-]*:/i.test(h)) return '';
+    return h;
+  }
+
+  // A registered layout answers "does the engine know this name". A GATE
+  // answers "can THIS entry actually wear it" — the first is the engine's
+  // vocabulary, the second is the content's, and they fail differently. Gates
+  // live in a table rather than a branch in buildCard so the next picture-aware
+  // layout (the image ladder, still future) lands as a rule here instead of a
+  // special case in the dispatcher.
+  var CARD_GATES = {
+    text: {
+      hero: function (entry) { return !!heroFilename(entry); },
+    },
+  };
+
+  // Resolve the layout NAME, then let its gate veto it. 'default' has no gate
+  // and never gets one — it is what everything falls back to.
+  function layoutFor(kind, entry) {
+    var layout = resolveLayout(kind, cardDescriptor(entry).layout);
+    var gate = CARD_GATES[kind] && CARD_GATES[kind][layout];
+    return (gate && !gate(entry)) ? 'default' : layout;
+  }
+
   // ---- sample fallback: a MISSING data file is an un-seeded fork ----
   // Same contract as the archive/wall pages (manual §5.21): a file that fails
   // to load falls back to bundled CC0 samples, while a file that loads as []
@@ -364,6 +449,12 @@
     audioPick: audioPick,
     pinAudio: pinAudio,
     pickRecent: pickRecent,
+    cardLayouts: CARD_LAYOUTS,
+    resolveLayout: resolveLayout,
+    cardDescriptor: cardDescriptor,
+    cardGates: CARD_GATES,
+    layoutFor: layoutFor,
+    heroFilename: heroFilename,
     sampleFrames: sampleFrames,
     sampleNote: sampleNote,
     withSampleFallback: withSampleFallback,
@@ -467,6 +558,49 @@
     a.appendChild(title);
     a.appendChild(snip);
     a.appendChild(meta);
+    return a;
+  }
+
+  // ---- field-note card, HERO layout (CARD_LAYOUTS.text: 'hero') ----
+  // The engine's first real layout, and hero-FORWARD rather than "newsy"
+  // (docs/field-note-card-vision.md): the picture does the visual work, the
+  // title sits under it as a caption, and the note's identity is carried by
+  // the same on-media chip the archive and RAW cards wear — not by a headline
+  // stamped across the photograph. Nothing else touches the image, so the only
+  // scrim in play is the one .wk-tag already brings, which is theme-
+  // independent by construction because it sits on a photo rather than on the
+  // page.
+  //
+  // Structurally this IS photoCard: same 4:5 background-image tile, same
+  // cardFocus → focus → CSS-centre fallback, so a note whose hero was framed
+  // for the wide OG crop degrades to a centred crop rather than to nothing.
+  // The display face on the title is the one thing kept from the text tile — a
+  // note's title is prose where a frame's is a label, and the type says so.
+  //
+  // Only reachable through the gate above: by the time this runs the entry has
+  // a usable hero filename.
+  function textHeroCard(post) {
+    var a = el('a', 'wk-card wk-text');
+    a.href = '/field-notes/post?slug=' + encodeURIComponent(post.fn_id || '');
+
+    var img = el('div', 'wk-img');
+    img.style.backgroundImage = "url('" + frameSrc(heroFilename(post), 1024) + "')";
+    var cardPos = cardFocus(post);
+    if (cardPos) img.style.backgroundPosition = cardPos;
+    var tag = el('span', 'wk-tag');
+    tag.textContent = 'Field Note';
+    img.appendChild(tag);
+
+    var body = el('div', 'wk-body');
+    var title = el('div', 'wk-t-title');
+    title.textContent = post.title || '';
+    var meta = el('div', 'wk-meta');
+    meta.textContent = [post.location, yearOf(post)].filter(Boolean).join(' · ');
+    body.appendChild(title);
+    body.appendChild(meta);
+
+    a.appendChild(img);
+    a.appendChild(body);
     return a;
   }
 
@@ -832,6 +966,34 @@
     return card;
   }
 
+  // ---- the kind registry: one renderer per kind ----
+  // Replaces the old dispatch ternary. Each renderer takes the picked item and
+  // the RESOLVED layout name. A new layout lands as (1) its name in
+  // CARD_LAYOUTS above, (2) a gate in CARD_GATES if it needs anything from the
+  // entry, and (3) a branch on the layout argument here or a data-layout rule
+  // in css/main.css — never a new kind. A renderer that has only one layout
+  // ignores the argument. An unknown kind falls through to the text renderer,
+  // exactly as the old ternary chain did.
+  var CARD_KINDS = {
+    pulse: function (item) { return pulseCard(item.data); },
+    audio: function (item) { return audioCard(item.data); },
+    photo: function (item) { return photoCard(item.data, item.raw); },
+    text: function (item, layout) {
+      return layout === 'hero' ? textHeroCard(item.data) : textCard(item.data);
+    },
+  };
+
+  function buildCard(item) {
+    var renderKind = CARD_KINDS[item.kind] || CARD_KINDS.text;
+    var layout = layoutFor(item.kind, item.data);
+    var node = renderKind(item, layout);
+    // 'default' must add nothing (the byte-identity contract, see the engine
+    // seam comment above) — only a real choice reaches the markup.
+    if (layout !== 'default') node.setAttribute('data-layout', layout);
+    return node;
+  }
+  g.RecentIndex.buildCard = buildCard;
+
   // null = the data file is MISSING (an un-seeded fork), [] = it loaded empty
   // (cleared on purpose). The caller maps null to the sample fallback — the
   // same missing-vs-empty split the archive and wall pages make (manual §5.21).
@@ -877,12 +1039,7 @@
         }
         var frag = document.createDocumentFragment();
         picks.forEach(function (item) {
-          frag.appendChild(
-            item.kind === 'pulse' ? pulseCard(item.data)
-              : item.kind === 'audio' ? audioCard(item.data)
-                : item.kind === 'photo' ? photoCard(item.data, item.raw)
-                  : textCard(item.data)
-          );
+          frag.appendChild(buildCard(item));
         });
         host.textContent = '';
         host.appendChild(frag);

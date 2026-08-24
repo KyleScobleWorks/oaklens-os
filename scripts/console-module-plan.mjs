@@ -93,6 +93,13 @@ const PLAN = [
   // Above fn-editor because attaching a track from the editor inserts its
   // shortcode (fnInsertAtCursor) — same direction asset-library already runs.
   ['audio', ['AUDIO SHELF']],
+  // The Cards view. No callgraph sections of its own — it was written as a
+  // module, never extracted from console-ui.js — so its entry carries an empty
+  // section list and contributes no inferred edges. Its real imports are what
+  // tests/console-modules.test.js checks, and they all point below: state,
+  // chrome, assets, fn-editor. It sits under publish so Chunk 4's actions can
+  // reach focal/audio without either of them reaching back.
+  ['cards', []],
   ['publish', ['PUBLISH', 'IMPORT EXISTING DATA']],
   ['session', ['SESSION AUTH (UI)']],
   ['bench', ['BENCH']],

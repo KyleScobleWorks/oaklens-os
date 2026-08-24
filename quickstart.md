@@ -367,13 +367,27 @@ by design, so featuring is per-frame and deliberate.
 **Do step 2.** Skipping it is the most common reason a featured frame looks wrong
 or doesn't seem to land properly on the homepage.
 
-**How you know it worked.** A **★** badge sits on the frame in the console, and
-after publishing there's a RAW card on your homepage.
+**How you know it worked — before you publish.** Open **Cards** in the sidebar.
+It shows your homepage grid twice: what's on it right now, and what it'll be
+after your next publish, with the changed slots marked. Your starred frame
+should be sitting in the staged column. You can star, unstar and set the crop
+right there too, on the card itself.
 
-> **The homepage shows one RAW card** — the most recently featured one wins.
-> Featuring several doesn't break anything; the extras simply wait.
+A **★** badge also sits on the frame in the console, and after publishing
+there's a RAW card on your homepage.
 
-To take it down: click **★** again. It's off the homepage at your next publish.
+> **The homepage shows one RAW card, and starring is exclusive** — starring a
+> frame un-stars the previous one in the same click (the toast names the frame
+> that stepped down). The old frame keeps its card crop, so re-starring it
+> later is one click with the crop intact.
+
+To take it down: click **★** again — on the frame, or on its tile in **Cards**.
+It's off the homepage at your next publish.
+
+**Changed your mind straight away?** Cards keeps a **↩ RE-PIN** button naming
+the frame your last star pushed off, and a small **ready to re-feature** row of
+frames you've already framed for this card. Either one is a single click, and
+the crop comes back with the frame.
 
 ### 12 · Make the share card ▣
 

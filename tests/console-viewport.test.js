@@ -337,32 +337,39 @@ describe('the tablet pass — a wide, short screen spends width, not height', ()
   });
 });
 
-describe('the preview pane wears no caption', () => {
-  // Markup minus its HTML comments — the comment above the pane names the
-  // caption it removed, and a raw match reads that explanation as the bug.
+describe('the split preview pane is gone, and stays gone', () => {
+  // This block used to pin the two-pane compose grid's details — that its
+  // preview carried no caption, that its action group sat at the trailing edge,
+  // that portrait dropped the whole row. All three were patches on a layout
+  // that has since been replaced outright: the preview is a slide-over overlay
+  // now, and the writing surface is a single manuscript canvas.
+  //
+  // What is worth keeping from here is the negative: the pane must not come
+  // back, because holding a live preview beside the writing is what made the
+  // surface width-hungry — which is what wrapped the toolbar, which is what let
+  // every autosave move the buttons. The studio's own invariants live in
+  // tests/fn-studio.test.js. Reasoning:
+  // docs/maintenance/2026-08-23-field-notes-studio.md.
   const html = read('dev/field-console.html').replace(/<!--[\s\S]*?-->/g, '');
 
-  it('the "RENDERED PREVIEW" label is gone from the screen', () => {
-    // A pane you cannot type into, beside one you can, explains itself the
-    // moment you type — and that caption was spending the width that cut
-    // ▲ STAGE POST in half on a tablet.
-    expect(html).not.toContain('RENDERED PREVIEW');
+  it('no second writing pane in the markup', () => {
+    // `preview-pane` needs the boundary: the studio's own overlay is
+    // #fn-preview-panel, which contains the dead name as a substring.
+    for (const dead of [/\bpreview-pane\b/, /fn-compose/, /fn-pane-hdr/, /fn-portrait-bar/]) {
+      expect(html, `${dead} is back — the split pane returned`).not.toMatch(dead);
+    }
   });
 
-  it('but the name survives for screen readers, where it costs no pixels', () => {
-    expect(html).toMatch(/class="preview-pane"[^>]*role="region"[^>]*aria-label="Rendered preview"/);
+  it('no rules left styling one', () => {
+    for (const dead of ['.fn-compose', '.preview-pane', '.fn-pane-hdr', '.fn-portrait-bar']) {
+      expect(css, `${dead} is back in the stylesheet`).not.toContain(dead);
+    }
   });
 
-  it('the action group still sits at the trailing edge', () => {
-    // `justify-content: space-between` needs two children to mean anything;
-    // with the caption gone it would park the buttons on the left.
-    expect(html).toContain('fn-pane-hdr fn-pane-hdr--actions');
-    expect(css).toMatch(/\.fn-pane-hdr--actions \{[^}]*justify-content: flex-end/);
-  });
-
-  it('portrait drops the whole row, not just its buttons', () => {
-    // The portrait action bar carries these buttons, so the row would be an
-    // empty strip — and rows are the scarce thing on a phone.
-    expect(css).toMatch(/#view-fn \.preview-pane \.fn-pane-hdr \{ display: none/);
+  it('the preview is an overlay, and it renders only while it is open', () => {
+    const js = read('js/console/fn-editor.js');
+    // The old pane was always on screen, so it re-rendered markdown on every
+    // keystroke and had no choice. A closed overlay must cost nothing.
+    expect(js).toMatch(/export function fnRender\(\)\s*\{[^}]*if \(fnPreviewOpen\) _fnRenderPreview\(\)/);
   });
 });

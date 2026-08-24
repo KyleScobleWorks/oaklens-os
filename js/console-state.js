@@ -36,7 +36,8 @@ export const STATE = {
   audio:      [],   // {id, slug, filename, title, sub, duration, peaks, featured, episode, download, added_at}
   staged:     {     // tracks unpublished changes per surface
     buffer: 0, archive: 0, posts: 0, wallpapers: 0, barrel: 0, friends: 0, library: 0, audio: 0
-  }
+  },
+  stagedLog:  []    // per-ITEM ledger of those changes — see STAGE TRACKING below
 };
 
 export const STORAGE_KEY = "oaklens_console_v01";
@@ -69,14 +70,25 @@ export function save() {
     // auto-publishes on change), so its imported entries are safe to drop as well —
     // locally-created library entries carry no _imported flag and are kept here as
     // a fallback until the next sync re-imports them.
-    lean.buffer = lean.buffer.filter(b => !b._imported);
-    lean.archive = lean.archive.filter(a => !a._imported);
-    lean.wallpapers = lean.wallpapers.filter(w => !w._imported);
-    lean.barrel = lean.barrel.filter(b => !b._imported);
-    lean.friends = lean.friends.filter(f => !f._imported);
-    lean.posts = lean.posts.filter(p => !p._imported);
-    lean.library = lean.library.filter(l => !l._imported);
-    lean.audio = (lean.audio || []).filter(a => !a._imported);
+    //
+    // EXCEPT the dirty ones: an imported entry with a ledger-tracked
+    // unpublished edit is the only copy of that edit anywhere — the next login
+    // sync would re-import the PRE-edit version from main. Keeping just those
+    // (blobs already stripped above, row count capped by LEDGER_CAP) costs
+    // almost nothing and closes the reload half of the 2026-08-23
+    // first-publish settings loss.
+    const keep = (surface) => {
+      const dirty = stagedIdsFor(surface);
+      return (e) => !e._imported || dirty.has(e.id);
+    };
+    lean.buffer = lean.buffer.filter(keep('buffer'));
+    lean.archive = lean.archive.filter(keep('archive'));
+    lean.wallpapers = lean.wallpapers.filter(keep('wallpapers'));
+    lean.barrel = lean.barrel.filter(keep('barrel'));
+    lean.friends = lean.friends.filter(keep('friends'));
+    lean.posts = lean.posts.filter(keep('posts'));
+    lean.library = lean.library.filter(keep('library'));
+    lean.audio = (lean.audio || []).filter(keep('audio'));
 
     const json = JSON.stringify(lean);
     const sizeKB = Math.round(json.length / 1024);
@@ -111,6 +123,9 @@ export function load() {
     const data = JSON.parse(raw);
     Object.assign(STATE, data);
   } catch(e){ console.warn("load failed", e); }
+  // States saved before the ledger existed have no stagedLog key (or a
+  // corrupted one) — normalize so every reader can assume an array.
+  if (!Array.isArray(STATE.stagedLog)) STATE.stagedLog = [];
 
   // Restore persisted R2 deletion queue (survives tab close)
   try {
@@ -156,8 +171,61 @@ export function bumpStage(surface, delta) {
   refreshStageIndicators();
   save();
 }
+
+// The staged-change LEDGER. STATE.staged counts gestures ("+3 ▲"); the ledger
+// records which ITEMS those gestures touched, so the publish view can list
+// changes by name and — load-bearing, not cosmetic — so sync and save() know
+// which _imported entries carry unpublished local edits and must not be
+// replaced by the remote copy or dropped from localStorage (the 2026-08-23
+// first-publish settings loss). One row per (surface, primary id); repeated
+// gestures on the same item fold into the row's `n` rather than adding rows,
+// which keeps the counters' one-gesture-one-bump law untouched while the list
+// stays readable.
+//
+// Row: { surface, ids, label, kind: 'add'|'edit'|'remove'|'feature', n, ts }
+//   ids   — entry ids the change touches; [0] is primary (the dedupe key).
+//           The featured swap passes [newId, prevId]: both entries changed,
+//           both need sync protection.
+//   label — composed by the CALLER (it knows frame numbers and titles; this
+//           module deliberately knows nothing above itself).
+export const LEDGER_CAP = 200;   // rows; counters stay authoritative past it
+
+export function stageChange(surface, meta = {}) {
+  const { id, ids, label, kind = 'edit', delta = 1 } = meta;
+  const idList = ids || (id !== undefined && id !== null ? [id] : []);
+  if (idList.length) {
+    const row = STATE.stagedLog.find(r => r.surface === surface && r.ids[0] === idList[0]);
+    if (row) {
+      row.n += 1;
+      row.ts = Date.now();
+      if (label) row.label = label;
+      row.kind = kind;   // the latest change wins the glyph
+      row.ids = [...new Set([...row.ids, ...idList])];
+    } else {
+      STATE.stagedLog.push({
+        surface, ids: idList,
+        label: label || surface + ' item',
+        kind, n: 1, ts: Date.now(),
+      });
+      if (STATE.stagedLog.length > LEDGER_CAP) STATE.stagedLog.shift();
+    }
+  }
+  bumpStage(surface, delta);   // bumpStage runs the indicator refresh + save
+}
+
+// Every id on a surface with a ledger-tracked unpublished change. Derived on
+// demand, never stored — the protection set importIntoSurface and save() key on.
+export function stagedIdsFor(surface) {
+  const out = new Set();
+  for (const r of STATE.stagedLog) {
+    if (r.surface === surface) r.ids.forEach(i => out.add(i));
+  }
+  return out;
+}
+
 export function clearStage() {
   Object.keys(STATE.staged).forEach(k => STATE.staged[k] = 0);
+  STATE.stagedLog.length = 0;
   refreshStageIndicators();
   save();
 }
@@ -177,15 +245,35 @@ export function trashItem(surface, id) {
   const idx = arr.findIndex(x => x.id === id);
   if (idx < 0) return;
   const [removed] = arr.splice(idx, 1);
+  const label = removed.title || removed.fn_id || removed.filename || (surface + " item");
+
+  // Ledger mirror of the ± logic below. A never-published item's rows are the
+  // pending add + edits this trash cancels — pull them out, but STASH them on
+  // the trash record so ↩ RESTORE can reinstate them exactly. An imported
+  // item's rows describe edits to something that no longer exists locally;
+  // the one true pending change is now the deletion itself.
+  const ledgerRows = [];
+  for (let i = STATE.stagedLog.length - 1; i >= 0; i--) {
+    const r = STATE.stagedLog[i];
+    if (r.surface === surface && r.ids[0] === id) {
+      ledgerRows.unshift(...STATE.stagedLog.splice(i, 1));
+    }
+  }
+
   sessionTrash.unshift({
     surface,
     item: removed,
     deletedAt: new Date().toLocaleTimeString(),
-    label: removed.title || removed.fn_id || removed.filename || (surface + " item"),
+    label,
+    ledgerRows,
   });
   // Imported items were already published — trashing them is a new pending deletion (+1).
   // Newly-added items (never published) — trashing cancels the pending add (-1).
-  bumpStage(surface, removed._imported ? 1 : -1);
+  if (removed._imported) {
+    stageChange(surface, { id, label, kind: 'remove' });
+  } else {
+    bumpStage(surface, -1);
+  }
 
   // Queue R2 cleanup for uploaded items
   if ((removed._uploaded || removed._imported) && removed.filename) {
@@ -236,8 +324,23 @@ export function trashRestore(trashIndex) {
   const trashed = sessionTrash.splice(trashIndex, 1)[0];
   if (!trashed) return;
   STATE[trashed.surface].unshift(trashed.item);
-  // Reverse of trashItem: restoring a published item cancels the pending deletion (-1);
-  // restoring a new item reinstates the pending add (+1).
+  // Reverse of trashItem, ledger included: restoring a published item cancels
+  // the pending deletion (-1, and its 'remove' row goes); restoring a new item
+  // reinstates the pending add (+1). EITHER way the rows stashed at trash time
+  // come back — for an imported item they are its unpublished edits, and
+  // without them the next sync would replace the restored entry and eat those
+  // edits (the exact loss class this ledger exists to close).
+  if (trashed.item._imported) {
+    for (let i = STATE.stagedLog.length - 1; i >= 0; i--) {
+      const r = STATE.stagedLog[i];
+      if (r.surface === trashed.surface && r.ids[0] === trashed.item.id && r.kind === 'remove') {
+        STATE.stagedLog.splice(i, 1);
+      }
+    }
+  }
+  if (Array.isArray(trashed.ledgerRows) && trashed.ledgerRows.length) {
+    STATE.stagedLog.push(...trashed.ledgerRows);
+  }
   bumpStage(trashed.surface, trashed.item._imported ? -1 : 1);
   // Cancel any queued R2 deletion for this item
   setPendingR2Deletes(_pendingR2Deletes.filter(d => d.entryId !== trashed.item.id));
@@ -347,19 +450,21 @@ export function restoreSidebar() {
 // stays the separate "go dark" path.
 const FN_BAR_KEY = 'oaklens_fn_bar_hidden';
 function _applyFnBarBtns(hidden) {
-  const glyph = hidden ? '▴' : '▾';
-  const label = hidden ? 'Show tab bar' : 'Hide tab bar';
-  // Wide header toggle carries a label; the portrait action-bar one is glyph-only.
-  const wide = document.getElementById('fn-bar-toggle');
-  const mini = document.getElementById('fn-bar-toggle-p');
-  for (const [btn, text] of [[wide, glyph + ' BAR'], [mini, glyph]]) {
-    if (!btn) continue;
-    btn.textContent = text;
-    btn.title = label;
-    btn.setAttribute('aria-label', label);
-    btn.setAttribute('aria-pressed', hidden ? 'true' : 'false');
-    btn.classList.toggle('active', hidden);
-  }
+  // ONE toggle, in the FN editor's ⋯ menu (it used to be two — a labelled one
+  // in the editor header and a glyph-only twin on the portrait action bar —
+  // which is two places to keep in step for one boolean). Writes into the
+  // item's parts rather than over its textContent, because a menu row is a
+  // mark, a label and a hint, not a string.
+  const btn = document.getElementById('fn-bar-toggle');
+  if (!btn) return;
+  const label = hidden ? 'Show the bottom nav' : 'Hide the bottom nav';
+  const mark = btn.querySelector('.fn-menu-mark');
+  const text = btn.querySelector('.fn-bar-toggle-label');
+  if (mark) mark.textContent = hidden ? '▴' : '▾';
+  if (text) text.textContent = label;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-pressed', hidden ? 'true' : 'false');
 }
 export function toggleFnBar() {
   const hidden = document.body.classList.toggle('fn-bar-hidden');
@@ -381,7 +486,8 @@ export function resetConsole() {
   sessionTrash.length = 0;
   Object.assign(STATE, {
     buffer: [], archive: [], posts: [], wallpapers: [], barrel: [], friends: [], library: [], audio: [],
-    staged: { buffer: 0, archive: 0, posts: 0, wallpapers: 0, barrel: 0, friends: 0, library: 0, audio: 0 }
+    staged: { buffer: 0, archive: 0, posts: 0, wallpapers: 0, barrel: 0, friends: 0, library: 0, audio: 0 },
+    stagedLog: []
   });
   refreshStageIndicators();
   renderTrash();

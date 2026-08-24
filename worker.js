@@ -25,7 +25,7 @@ import {
   _frameImg, _ogImage, _navLinksHtml, HERO_PRELOAD_WIDTH,
 } from './src/edge/chrome.js';
 import {
-  handleManifest, handleSitemap, handleFeed, handlePodcastFeed, handleBufferSummary, handleSiteSettings,
+  handleManifest, handleSitemap, handleFeed, handlePodcastFeed, handleBufferSummary, handleSiteSettings, handleVersion,
   handleAnalogsToken,
 } from './src/api/site-meta.js';
 
@@ -105,6 +105,7 @@ const EXACT_ROUTES = new Map([
   ['GET /podcast.xml', (request, env) => handlePodcastFeed(request, env)],
   ['GET /api/buffer-summary', (request, env) => handleBufferSummary(request, env)],
   ['GET /api/site/settings', (request, env) => handleSiteSettings(request, env)],
+  ['GET /api/version', (request, env) => handleVersion(env)],
   ['GET /.well-known/analogs.txt', () => handleAnalogsToken()],
   ['POST /api/auth', (request, env) => handleAuth(request, env)],
   ['POST /api/logout', () => handleLogout()],

@@ -150,6 +150,15 @@ async function _commitFiles(token, owner, repo, files, expectedHeadSha) {
     body: JSON.stringify({ base_tree: treeSha, tree: treeItems }),
   });
 
+  // Identical tree → nothing to commit. A bundle that matches main byte-for-byte
+  // used to still create a commit — the zero-file "publish: field console
+  // update" entries in the history are those. Returning the current head keeps
+  // the console's flow intact (it records this sha as its base) without
+  // manufacturing an empty commit.
+  if (newTree.sha === treeSha) {
+    return commitSha;
+  }
+
   // Create commit
   const newCommit = await _ghFetch(token, owner, repo, 'git/commits', {
     method: 'POST',
@@ -366,23 +375,36 @@ export async function handleSync(request, env) {
   const [owner, repo] = env.GITHUB_REPO.split('/');
   const results = {};
 
-  // Current main HEAD, fetched alongside the files. The console records this as
-  // the base revision of the snapshot it just pulled and stamps it onto the next
-  // publish, so the worker can reject a publish built on stale state (see
-  // _commitFiles).
+  // Current main HEAD, resolved BEFORE the file reads so they can be pinned to
+  // it. The console records this as the base revision of the snapshot it just
+  // pulled and stamps it onto the next publish, so the worker can reject a
+  // publish built on stale state (see _commitFiles).
   //
-  // A failure here is non-fatal for the sync — the files themselves are still
-  // useful — but it is NOT harmless: a null headSha means the next publish
-  // carries no baseSha, which silently disarms the stale-base guard for that
-  // snapshot. So the response says so (`headShaError`) and the console surfaces
-  // it, rather than the protection quietly evaporating.
+  // The pinning matters: the ref read (git plumbing) is strongly consistent,
+  // but `contents/<path>?ref=main` resolves `main` on GitHub's eventually-
+  // consistent side — for a few seconds after a publish it can serve the
+  // PREVIOUS commit's content. A sync in that window used to return a fresh
+  // headSha stamped onto stale files; the console imported them, silently
+  // reverting just-published (or just-edited) entries, and the next publish —
+  // built on that reverted state but carrying the fresh sha — sailed past the
+  // stale-base guard and re-committed the past. Reading every file at
+  // `ref=<headSha>` makes "fresh sha, stale content" unrepresentable: content
+  // either matches the stamped revision or that file's read errors.
+  //
+  // A headSha failure is non-fatal for the sync — the files themselves are
+  // still useful (read at `ref=main`, the old behavior) — but it is NOT
+  // harmless: a null headSha means the next publish carries no baseSha, which
+  // silently disarms the stale-base guard for that snapshot. So the response
+  // says so (`headShaError`) and the console surfaces it, rather than the
+  // protection quietly evaporating.
   let headShaError = null;
-  const headShaPromise = _headSha(env.GITHUB_TOKEN, owner, repo)
+  const headSha = await _headSha(env.GITHUB_TOKEN, owner, repo)
     .catch((err) => {
       headShaError = err.message || 'ref fetch failed';
       console.error('[sync] main HEAD unavailable:', headShaError);
       return null;
     });
+  const contentRef = headSha || 'main';
 
   // Fetch all requested files concurrently — each had its own GitHub round-trip
   // awaited in series before. Per-file try/catch keeps one failure from sinking
@@ -391,7 +413,7 @@ export async function handleSync(request, env) {
     // Prevent path traversal
     if (filePath.includes('..') || filePath.startsWith('/')) return;
     try {
-      const data = await _ghFetch(env.GITHUB_TOKEN, owner, repo, `contents/${filePath}?ref=main`);
+      const data = await _ghFetch(env.GITHUB_TOKEN, owner, repo, `contents/${filePath}?ref=${contentRef}`);
       const content = JSON.parse(
         new TextDecoder().decode(
           Uint8Array.from(atob(data.content.replace(/\s/g, '')), c => c.charCodeAt(0))
@@ -403,7 +425,6 @@ export async function handleSync(request, env) {
     }
   }));
 
-  const headSha = await headShaPromise;
   return jsonRes({
     ok: true,
     files: results,

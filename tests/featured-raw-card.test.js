@@ -163,9 +163,12 @@ describe('the client half — that payload becomes a RAW card', () => {
     expect(rawCard().querySelector('.wk-img').style.backgroundPosition).toBe('39% 57%');
   });
 
-  it('lands in the RAW slot, not merely somewhere', () => {
+  it('leads the row, not merely lands somewhere — it is the only pin here', () => {
+    // Pins compact to the top in rank order (pulse → audio → RAW), so with no
+    // pulse and no featured track the RAW daily is card 1. The rank, and the
+    // hidden-fourth-card bug that produced it, live in tests/pulse-card.test.js.
     const cards = [...host.querySelectorAll('.wk-card')];
-    expect(cards.indexOf(rawCard())).toBe(2);
+    expect(cards.indexOf(rawCard())).toBe(0);
   });
 });
 

@@ -25,6 +25,23 @@ resources. Keep yours. [setup.md](setup.md) has the exact commands.
 
 ---
 
+## 2026-08-27 (homepage pin fix)
+
+**Fixed: a starred frame could land in the card only a tablet shows.** Your
+homepage grid loads four cards but shows three — the fourth appears only on a
+tablet held upright. If you had a **pulse live** and a **starred frame** (or a
+featured track) at the same time, the pulse pushed your pin down into that
+fourth card, so you starred something and nothing changed on your desktop or
+phone homepage.
+
+Pins now fill the row **from the top**, in order: a live pulse takes card 1, your
+starred frame or featured track takes card 2, and your most recent work follows.
+With no pulse live, the pin moves up to card 1. Card 3 is never a pin, so there
+is always at least one genuinely recent thing on the page. Nothing for you to
+do — just merge.
+
+---
+
 ## 2026-08-24 (dark-frame fix)
 
 **Fixed: retiring a frame now sticks after you publish.** When you retire a

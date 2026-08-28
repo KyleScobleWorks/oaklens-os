@@ -182,19 +182,20 @@ describe('_stagedInputs is what the next publish would emit', () => {
 // ---------------------------------------------------------------- the columns
 
 describe('the staged column, composed by the homepage\'s own logic', () => {
-  it('lands audio in slot 1 and the featured RAW in slot 2, content around them', () => {
+  it('leads with the two pins — audio then RAW — and fills recent work behind them', () => {
     STATE.archive = [photo('newest', { added_at: '2026-08-09' }), photo('older', { added_at: '2026-08-03' })];
     STATE.posts = [post('fn-001', { added_at: '2026-08-08' })];
     STATE.audio = [track('t-one', { featured: true, featured_order: 1 }), track('t-two')];
     STATE.buffer = [frame('a1', '14', { featured: true }), frame('b2', '15')];
 
     const slots = _cardSlots({ ..._stagedInputs(), pulse: null });
-    expect(slots[1].kind).toBe('audio');
-    expect(slots[1].title).toBe('T-ONE');
-    expect(slots[2].kind).toBe('raw');
-    expect(slots[2].title).toBe('f#001');
-    // Slots 0 and 3 are ordinary recent work, newest first.
-    expect(['archive', 'text']).toContain(slots[0].kind);
+    expect(slots[0].kind).toBe('audio');
+    expect(slots[0].title).toBe('T-ONE');
+    expect(slots[1].kind).toBe('raw');
+    expect(slots[1].title).toBe('f#001');
+    // Slots 2 and 3 are ordinary recent work, newest first — pins take the top
+    // of the row in rank order, so the recent pool always starts below them.
+    expect(['archive', 'text']).toContain(slots[2].kind);
     expect(slots[3]).not.toBeNull();
   });
 

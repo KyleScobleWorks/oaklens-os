@@ -74,6 +74,14 @@ export const BACKFILL = Object.freeze({
   demoMode: false,
   repoConnected: false,
   poweredBy: true,
+  // The client portal (`/c/*` + `/p/<code>` links). OFF unless explicitly true.
+  // Instance-scoped: the engine strips the portal from forks entirely (see
+  // scripts/os-extract.mjs), so the code that reads this flag exists only on an
+  // instance — a fork carries the default here and nothing acts on it. The
+  // portal is frozen and deferred to a proper rebuild; off is its safe resting
+  // state (every /c/* and /p/ request is inert). See CLAUDE.md's portal note
+  // and docs/maintenance/2026-08-24-v1-code-review.md.
+  portalEnabled: false,
 });
 
 /** Absence is a signal: filled in only when the fork supplied the key. */

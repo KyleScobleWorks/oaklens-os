@@ -16,7 +16,7 @@
 // Mutations (/api/* upload, publish, sync) always require the network and are
 // never intercepted or cached — this SW only serves the static shell.
 
-const CACHE = 'oaklens-console-v132';
+const CACHE = 'oaklens-console-v133';
 const SHELL = '/dev/field-console.html';
 // Same-origin shell assets. The js/ versions here must match the import map in
 // field-console.html exactly — that map is where a module's version is decided,
@@ -53,7 +53,7 @@ const SHELL_ASSETS = [
   // logic, which the shell pulls in as a classic <script> so the Cards view
   // previews with the real selection code. Precached like everything else so an
   // installed PWA keeps its preview offline.
-  '/js/recent-index.js?v=16',
+  '/js/recent-index.js?v=17',
   '/js/raw-lens.js?v=5',
   '/js/jpeg-privacy.js?v=1',
   '/js/raw-extract.js?v=4',

@@ -13,9 +13,16 @@
 // change looks harmless here.
 //
 // Fixture A: live pulse + single featured audio + archive photo + text post
-//            (standard tier, drop cap). Pulse in slot 0.
+//            (standard tier, drop cap). Pulse leads.
 // Fixture B: no pulse; featured RAW daily + 3-track playlist + archive photo
 //            + statement-tier text (no drop cap).
+//
+// Both fixtures were REORDERED on 2026-08-27 when pins stopped carrying fixed
+// card numbers and began compacting to the head of the row (the starred frame
+// that landed in the tablet-only card — tests/pulse-card.test.js). Not one byte
+// of any card's markup moved: the reorder was applied by rebuilding the row and
+// asserting the two sets of card HTML were identical before rewriting the file,
+// so these still say exactly what they were captured to say.
 //
 // The 'hero' layout (Chunk 2) is exercised at the bottom: it is the first
 // layout that is not 'default', so it is also the first proof that a real
@@ -106,11 +113,11 @@ beforeAll(async () => {
 });
 
 describe('byte identity — the default layout adds nothing', () => {
-  it('grid A (pulse · text · audio · photo) matches the pre-engine renderer exactly', () => {
+  it('grid A (pulse · audio · text · photo) matches the pre-engine renderer exactly', () => {
     expect(host.innerHTML).toBe(fixture('card-engine-grid-a.html'));
   });
 
-  it('grid B (text · playlist · RAW · photo) matches the pre-engine renderer exactly', () => {
+  it('grid B (playlist · RAW · text · photo) matches the pre-engine renderer exactly', () => {
     const picks = RI.pickRecent([ARCHIVE_ENTRY], [SHORT_POST], [RAW_ENTRY], PLAYLIST_AUDIO, { pulse: null });
     const html = picks.map((item) => RI.buildCard(item).outerHTML).join('');
     expect(html).toBe(fixture('card-engine-grid-b.html'));

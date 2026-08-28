@@ -82,12 +82,16 @@ five, every time:
      bumping one module doesn't edit its importers and cascade up the stack.
    - **Either way:** bump the `dev/sw.js` `CACHE` name **once** for the whole
      change, not once per file.
-   > ⚠️ **The #1 silent miss.** `tests/guards.test.js` only checks that a file's
-   > `?v=` is *consistent* across references — **not** that you bumped it when the
-   > content changed. So a forgotten bump **passes CI** and then ships stale
-   > CSS/JS to every installed PWA (the service worker serves the old cached
-   > copy). Browser tabs revalidate and look fine, which is exactly how this hides.
-   > If you edited a module or the stylesheet, bumping `?v=` is not optional.
+   > ⚠️ **The #1 silent miss, now caught.** `tests/guards.test.js` only checks
+   > that a file's `?v=` is *consistent* across references — **not** that you
+   > bumped it when the content changed. A forgotten bump used to pass CI and
+   > then ship stale CSS/JS to every installed PWA (the service worker serves the
+   > old cached copy) while browser tabs revalidated and looked fine, which is
+   > exactly how it hid. **`tests/version-bump.test.js` closes that gap**: it
+   > diffs `js/*` and `css/*` against the merge-base with `origin/main` and fails
+   > when content moved and the version didn't. So a missed bump is now a RED
+   > suite naming the file — not a silent ship. Bumping is still yours to do; the
+   > test only refuses to let you forget.
 
 3. **Update the docs your change touches.** `setup.md` (deploying and
    operating an instance), `quickstart.md` (the post-install guide), and any

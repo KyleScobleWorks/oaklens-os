@@ -131,18 +131,11 @@
     return (featured || []).filter(function (r) { return r && r.filename; }).slice(0, max);
   }
 
-  // A featured RAW daily is PINNED to a fixed slot (the third card) and always
-  // shows, no matter its capture date — so the owner can feature ANY frame from
-  // ANY period and have it land on the homepage. The other slots fill
-  // newest-first around it. (With no featured frame the caller keeps the normal
-  // newest-first mix, and the freshest item naturally reclaims the slot.) Pure,
-  // so the placement is pinned by the test suite.
-  var RAW_SLOT = 2;   // 0-based → the third card, visible in both 3-up and 4-up
-  function pinRaw(nonRaw, rawItem, gridSize) {
-    var picks = (nonRaw || []).slice(0, gridSize - 1);
-    picks.splice(Math.min(RAW_SLOT, picks.length), 0, rawItem);
-    return picks.slice(0, gridSize);
-  }
+  // A featured RAW daily is PINNED and always shows, no matter its capture date
+  // — so the owner can feature ANY frame from ANY period and have it land on
+  // the homepage. Where it lands is pinTop's job (below); with no featured
+  // frame the caller keeps the normal newest-first mix and the freshest item
+  // reclaims the card.
 
   // ---- Audio cards: fed ONLY from the audio registry (data/audio.json), never
   //      deduced from a post's mix of text and media. An entry the owner flags
@@ -163,16 +156,9 @@
     return featured.slice(0, limit);
   }
 
-  // Pinned to the SECOND slot, ahead of the RAW daily's third. Applied BEFORE
-  // pinRaw so the running order lands photo · audio · RAW — all three visible
-  // in the 3-up desktop row. (Pinning after would push RAW to the fourth slot,
-  // which desktop hides.) Pure, so the placement is pinned by the test suite.
-  var AUDIO_SLOT = 1;
-  function pinAudio(items, audioItem, gridSize) {
-    var picks = (items || []).slice();
-    picks.splice(Math.min(AUDIO_SLOT, picks.length), 0, audioItem);
-    return picks.slice(0, gridSize);
-  }
+  // A featured track outranks the RAW daily, so with both up the running order
+  // is audio then RAW (see pinTop for the rank and why it is an order rather
+  // than a card number).
 
   // ---- Pulse: the live card, pinned to the FIRST slot ----
   // Fed from /api/pulse (D1), not from a data file — posting a pulse must not
@@ -188,24 +174,48 @@
     return (hasText || hasGlyph) ? m : null;
   }
 
-  // THE PIN BUDGET. Desktop shows 3 of the 4 tiles, and audio (slot 1) + the
-  // RAW daily (slot 2) are already pinned. A third pin would mean a homepage
-  // where NOTHING is actually recent — three owner-chosen tiles and no work.
-  // So: the pulse always wins slot 0, and at most TWO pins are visible at once.
-  // When a pulse is live, the OLDER of (featured audio, featured RAW) yields its
-  // pin and DOES NOT RENDER this cycle. It is not demoted into the newest-first
+  // ---- THE PIN RANK: pins own an ORDER, never a card number ----
+  // Ranked pulse → audio → RAW, the live pins take the FIRST cards of the row
+  // and the newest-first pool fills whatever is left. So a pulse leads whenever
+  // one is live, the content pin sits directly under it, and the most recent
+  // work lands in card 2 or card 3 depending on how many pins are up. Pins
+  // COMPACT: with no pulse the content pin moves up to card 1 rather than
+  // holding a chair for something that isn't there.
+  //
+  // ⚠️ This replaced three ABSOLUTE slot indexes (pulse 0, audio 1, RAW 2)
+  // spliced in one after another, pulse LAST. Every splice shifted everything
+  // after it, so a live pulse pushed the RAW pin from card 3 to card 4 — the
+  // tablet-only card, hidden on desktop and phone. The owner starred a frame
+  // and the homepage never showed it. Absolute indexes were the bug, and they
+  // were individually right and collectively wrong: nothing in them said "a pin
+  // sits after the pins above it", so they only held while one pin was in play.
+  // Keep pins ordered; do not give one a number back.
+  // (2026-08-27 — docs/maintenance/2026-08-27-starred-frame-hidden-fourth-slot.md)
+  //
+  // THE PIN BUDGET rides on top of the rank. Desktop shows 3 of the 4 cards, so
+  // three pins would mean a homepage where NOTHING is actually recent — three
+  // owner-chosen tiles and no work. At most TWO pins are visible at once: when a
+  // pulse is live, the OLDER of (featured audio, featured RAW) yields its pin
+  // and DOES NOT RENDER this cycle. It is not demoted into the newest-first
   // pool: that pool holds archive + posts only, and a featured item can be from
   // any period — a starred 2019 frame would lose every date comparison in it
   // anyway, so it would vanish either way, but *sometimes*, depending on what
   // else was published. Deterministic absence beats random presence. (This
   // comment claimed the demotion happened until 2026-08-23; the code never did
-  // it, and the code is right.) At least one tile is always genuinely recent.
-  var PULSE_SLOT = 0;
+  // it, and the code is right.) At least one card is always genuinely recent.
+  // VISIBLE_PINS is enforced HERE, not just described: pinTop takes the pins in
+  // rank order and stops at two, so the third card can never be a pin no matter
+  // what the caller hands over. yieldOlderPin already decides WHICH pin gives
+  // way — this is the structural floor under it, and it is what keeps the
+  // "at least one card is genuinely recent" invariant true by construction if a
+  // fourth pin is ever added above.
   var VISIBLE_PINS = 2;
-  function pinPulse(items, pulseItem, gridSize) {
-    var picks = (items || []).slice();
-    picks.splice(Math.min(PULSE_SLOT, picks.length), 0, pulseItem);
-    return picks.slice(0, gridSize);
+  function pinTop(pins, items, gridSize) {
+    var row = [];
+    for (var i = 0; i < (pins || []).length && row.length < VISIBLE_PINS; i++) {
+      if (pins[i]) row.push(pins[i]);
+    }
+    return row.concat(items || []).slice(0, gridSize);
   }
 
   // Which of the two content pins keeps its slot when a pulse is live. Newer
@@ -257,9 +267,8 @@
     items.sort(function (a, b) { return String(b.d).localeCompare(String(a.d)); });
 
     // Featured items are PINNED and always show regardless of date — the rest
-    // fills newest-first around them. Audio first (slot 1), then the RAW daily
-    // (slot 2); see pinAudio for why that order matters. When nothing is
-    // featured, fall through to the normal mixed newest-first grid.
+    // fills newest-first behind them, in the rank pinTop applies. When nothing
+    // is featured, fall through to the normal mixed newest-first grid.
     var audio = audioPick(audioFeatured, AUDIO_MAX_PLAYLIST);
     var raw = rawPick(rawFeatured);
     var live = pulsePick(pulse);
@@ -272,20 +281,22 @@
     }
     var rawItem = raw.length ? { kind: 'photo', raw: true, data: raw[0], d: raw[0].captured_at || '' } : null;
 
-    // With a live pulse there are three candidate pins for two visible slots —
-    // the older content pin yields and rejoins the pool (see yieldOlderPin).
+    // With a live pulse there are three candidate pins for two visible cards —
+    // the older content pin yields and does not render this cycle (the budget
+    // and the reason it is absence rather than demotion are on pinTop above).
     if (live && audioItem && rawItem) {
       var kept = yieldOlderPin(audioItem, rawItem);
       audioItem = kept.audio;
       rawItem = kept.raw;
     }
 
-    var pinned = items;
-    if (audioItem) pinned = pinAudio(pinned, audioItem, GRID_SIZE);
-    if (rawItem) pinned = pinRaw(pinned, rawItem, GRID_SIZE);
-    // Pulse goes on LAST so it lands in slot 0 ahead of the others.
-    if (live) pinned = pinPulse(pinned, { kind: 'pulse', data: live, d: '' }, GRID_SIZE);
-    if (live || audioItem || rawItem) return pinned.slice(0, GRID_SIZE);
+    if (live || audioItem || rawItem) {
+      return pinTop([
+        live ? { kind: 'pulse', data: live, d: '' } : null,
+        audioItem,
+        rawItem,
+      ], items, GRID_SIZE);
+    }
 
     var picks = items.slice(0, GRID_SIZE);
 
@@ -439,15 +450,13 @@
     tierLen: tierLen,
     recentInitial: recentInitial,
     pulsePick: pulsePick,
-    pinPulse: pinPulse,
+    pinTop: pinTop,
     yieldOlderPin: yieldOlderPin,
     pulseTier: pulseTier,
     playlistTier: playlistTier,
     cardFocus: cardFocus,
     rawPick: rawPick,
-    pinRaw: pinRaw,
     audioPick: audioPick,
-    pinAudio: pinAudio,
     pickRecent: pickRecent,
     cardLayouts: CARD_LAYOUTS,
     resolveLayout: resolveLayout,

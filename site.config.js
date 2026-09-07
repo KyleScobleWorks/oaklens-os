@@ -5,9 +5,9 @@
 // this one file, and everything else derives from the request origin at
 // runtime, so a fresh fork works on *.workers.dev with zero extra config.
 export default Object.freeze({
-  name: 'Your Studio',
+  name: 'Scoblevision',
   tagline: 'Selected work',
-  email: 'you@example.com',
+  email: 'kylescobleworks@gmail.com',
   contactName: 'You',
   // The display wordmark: nav logo, footer, page <title>, console chrome.
   // Optionally split in two so the second half takes the theme's accent colour

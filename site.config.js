@@ -33,7 +33,7 @@ export default Object.freeze({
   // 'noir' (tech-noir terminal: black / white / red) and 'cyanotype'
   // (the folio in Prussian-blue ink on cool paper) are one-word swaps.
   // defaultMode: 'midnight' | 'daylight' | 'auto' (follows the visitor's OS).
-  theme: { preset: 'selenium', defaultMode: 'midnight', toggle: true },
+  theme: { preset: 'aperture', defaultMode: 'midnight', toggle: true },
   // Featured image for the folio hero (the aperture/passe-partout homepage
   // hero, and noir's fallback). Ships pointing at a bundled CC0 sample frame so
   // a fresh fork renders immediately; swap for your own (a repo path or a
